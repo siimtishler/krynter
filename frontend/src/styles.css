@@ -1,0 +1,19 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+#search-bar {
+  position: absolute;
+  z-index: 1000;
+  top: 16px;
+  left: 3em;
+  background: white;
+  padding: 12px;
+  border: 1px solid #ddd;
+}
+
+* {
+  box-sizing: border-box;
+}
