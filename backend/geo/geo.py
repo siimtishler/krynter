@@ -35,7 +35,7 @@ class GeometryConverter():
             converted_geometry.iloc[0]
         )
 
-class ParcelCadastre():
+class Parcel():
     def __init__(self, parcel: pd.Series):
         self.parcel = parcel
         self.converter = GeometryConverter()
@@ -48,7 +48,21 @@ class ParcelCadastre():
         return self.converter.convert_shape_to_front_end_crs_geojson(self.parcel.geometry)
 
 
-def get_parcel_cadastre_series_from_address(address: str) -> ParcelCadastre:
+def get_parcel_cadastre_series_from_cadastre(cadastre_code: str) -> Parcel:
+    """
+    Given the exact address string returns the parcel address
+    """
+    matches = gd.loc[gd["tunnus"].eq(cadastre_code)]
+    if matches.empty:
+        logger.error("No matches found")
+        return None
+    elif len(matches) > 1:
+        logger.warning("Found more than 1 match")
+        return None
+    parcel = matches.iloc[0]
+    return Parcel(parcel=parcel)
+
+def get_parcel_cadastre_series_from_address(address: str) -> Parcel:
     """
     Given the exact address string returns the parcel address
     """
@@ -60,7 +74,7 @@ def get_parcel_cadastre_series_from_address(address: str) -> ParcelCadastre:
         logger.warning("Found more than 1 match")
         return None
     parcel = matches.iloc[0]
-    return ParcelCadastre(parcel=parcel)
+    return Parcel(parcel=parcel)
 
 if __name__ == "__main__":
     cadastre = get_parcel_cadastre_series_from_address("P. Kerese tn 5a")
