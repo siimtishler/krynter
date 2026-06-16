@@ -5,13 +5,12 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from backend.core.config import DATA_DIR, PROJECT_ROOT
+from backend.core.config import DATA_DIR, config
 from backend.core.logging import logger
 from backend.api.api import router
 
 
 app = FastAPI()
-
 
 @app.get("/vector_tiles/metadata.json")
 def get_vector_tile_metadata():
@@ -23,44 +22,7 @@ def get_vector_tile_metadata():
 
 @app.get("/tallinn_parcels/{z}/{x}/{y}.pbf")
 def get_vector_tile_close(z: int, x: int, y: int):
-    tile_path = DATA_DIR / "tallinn_parcels" / str(z) / str(x) / f"{y}.pbf"
-    if not tile_path.exists():
-        raise HTTPException(status_code=404, detail="Vector tile not found")
-
-    return FileResponse(
-        tile_path,
-        media_type="application/x-protobuf",
-        headers={"Content-Encoding": "gzip"},
-    )
-
-
-@app.get("/vector_tiles_close/{z}/{x}/{y}.pbf")
-def get_vector_tile_close(z: int, x: int, y: int):
-    tile_path = DATA_DIR / "kerese_close" / str(z) / str(x) / f"{y}.pbf"
-    if not tile_path.exists():
-        raise HTTPException(status_code=404, detail="Vector tile not found")
-
-    return FileResponse(
-        tile_path,
-        media_type="application/x-protobuf",
-        headers={"Content-Encoding": "gzip"},
-    )
-
-@app.get("/vector_tiles_mid/{z}/{x}/{y}.pbf")
-def get_vector_tile_mid(z: int, x: int, y: int):
-    tile_path = DATA_DIR / "kerese_mid" / str(z) / str(x) / f"{y}.pbf"
-    if not tile_path.exists():
-        raise HTTPException(status_code=404, detail="Vector tile not found")
-
-    return FileResponse(
-        tile_path,
-        media_type="application/x-protobuf",
-        headers={"Content-Encoding": "gzip"},
-    )
-
-@app.get("/vector_tiles_far/{z}/{x}/{y}.pbf")
-def get_vector_tile_far(z: int, x: int, y: int):
-    tile_path = DATA_DIR / "kerese_far" / str(z) / str(x) / f"{y}.pbf"
+    tile_path = config.cadastre_vector_file / str(z) / str(x) / f"{y}.pbf"
     if not tile_path.exists():
         raise HTTPException(status_code=404, detail="Vector tile not found")
 
