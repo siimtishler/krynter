@@ -9,5 +9,8 @@ class Config(BaseSettings):
     frontend_crs: str = "EPSG:4326"
     data_crs: str = "EPSG:3301"
     app_debug: bool = True
+    poi_file: Path = DATA_DIR / "Tallinn_POIS2.gpkg"
+    cadastre_file: Path = DATA_DIR / "Tallinn_KATASTER_GPKG2.gpkg"
+    cadastre_vector_file: Path = DATA_DIR / "tallinn_parcels"
 
 config = Config()
