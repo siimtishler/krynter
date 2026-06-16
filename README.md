@@ -26,9 +26,14 @@ Architects need to have a quick overview of requirements and surrounding persona
 
 
 ## Developing
-
+```
+poetry install
+poetry shell
+```
 Start backend dev
 `uvicorn backend.main:app --reload`
 
 Start frontend dev
 `cd frontend && npm run dev`
+
+Open up the frontend URL and youre good to go
