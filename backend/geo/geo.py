@@ -5,7 +5,6 @@ from functools import lru_cache
 from backend.core.logging import logger
 from backend.core.config import config
 
-
 DEFAULT_POI_LIMIT = 3
 POI_FILTER_COLUMNS = ("grupp", "alamgrupp", "poi_type")
 
@@ -167,6 +166,7 @@ POI_RESPONSE_COLUMNS = [
     "poi_type",
 ]
 
+
 @lru_cache(maxsize=1)
 def load_tallinn_kataster_file():
     try:
@@ -174,6 +174,7 @@ def load_tallinn_kataster_file():
     except Exception as e:
         logger.error(e)
     return gd
+
 
 @lru_cache(maxsize=1)
 def load_tallinn_poi_file():
@@ -183,23 +184,24 @@ def load_tallinn_poi_file():
         logger.error(e)
     return gd
 
+
 gd = load_tallinn_kataster_file()
 poigd = load_tallinn_poi_file()
 
 
-class GeometryConverter():
+class GeometryConverter:
     def __init__(self):
         self._front_end_crs = config.frontend_crs
         self._data_crs = config.data_crs
 
     def self_front_end_crs(self, crs: str):
         self._front_end_crs = crs
-    
+
     def convert_shape_to_front_end_crs_geojson(self, shape: shapely.Polygon) -> dict:
-        converted_geometry = gpd.GeoSeries([shape], crs=self._data_crs).to_crs(self._front_end_crs)
-        return shapely.geometry.mapping(
-            converted_geometry.iloc[0]
+        converted_geometry = gpd.GeoSeries([shape], crs=self._data_crs).to_crs(
+            self._front_end_crs
         )
+        return shapely.geometry.mapping(converted_geometry.iloc[0])
 
     def _ensure_poi_crs(self, pois: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         if pois.crs is None:
@@ -318,7 +320,8 @@ class GeometryConverter():
 
         return nearby_pois
 
-class Parcel():
+
+class Parcel:
     def __init__(self, parcel: gpd.GeoSeries):
         self.parcel = parcel
         self.converter = GeometryConverter()
@@ -337,10 +340,14 @@ class Parcel():
         return self.converter.convert_shape_to_front_end_crs_geojson(centre_point)
 
     def get_parcel_geometry_geojson(self) -> dict:
-        return self.converter.convert_shape_to_front_end_crs_geojson(self.parcel.geometry)
+        return self.converter.convert_shape_to_front_end_crs_geojson(
+            self.parcel.geometry
+        )
 
     def get_nearby_pois(self, top_n: int = DEFAULT_POI_LIMIT) -> dict:
-        return self.converter.get_nearest_pois_by_group(self.parcel.geometry, top_n=top_n, pois=poigd)
+        return self.converter.get_nearest_pois_by_group(
+            self.parcel.geometry, top_n=top_n, pois=poigd
+        )
 
 
 def get_parcel_cadastre_series_from_cadastre(cadastre_code: str) -> Parcel:
@@ -357,6 +364,7 @@ def get_parcel_cadastre_series_from_cadastre(cadastre_code: str) -> Parcel:
     parcel = matches.iloc[0]
     return Parcel(parcel=parcel)
 
+
 def get_parcel_cadastre_series_from_address(address: str) -> Parcel:
     """
     Given the exact address string returns the parcel address
@@ -370,6 +378,7 @@ def get_parcel_cadastre_series_from_address(address: str) -> Parcel:
         return None
     parcel = matches.iloc[0]
     return Parcel(parcel=parcel)
+
 
 if __name__ == "__main__":
     cadastre = get_parcel_cadastre_series_from_address("P. Kerese tn 5a")

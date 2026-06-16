@@ -3,14 +3,12 @@ from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 from backend.core.config import DATA_DIR, config
-from backend.core.logging import logger
 from backend.api.api import router
 
-
 app = FastAPI()
+
 
 @app.get("/vector_tiles/metadata.json")
 def get_vector_tile_metadata():
@@ -31,6 +29,7 @@ def get_vector_tile_close(z: int, x: int, y: int):
         media_type="application/x-protobuf",
         headers={"Content-Encoding": "gzip"},
     )
+
 
 app.include_router(router, prefix="/api")
 

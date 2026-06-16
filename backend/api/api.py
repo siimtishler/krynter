@@ -12,9 +12,11 @@ from backend.geo.geo import (
 
 router = APIRouter()
 
+
 @router.get("/")
 def read_root():
     return {"Hello": "World"}
+
 
 @router.get("/debug/kerese-gpkg.geojson")
 def get_kerese_gpkg_geojson():
@@ -35,9 +37,7 @@ def return_parcel_from_address(address: str, top_n: int = DEFAULT_POI_LIMIT):
     parcel: Parcel = get_parcel_cadastre_series_from_address(address)
     logger.debug(parcel)
     if parcel is None:
-        return {
-            "error": "parcel get failed via address search"
-        }
+        return {"error": "parcel get failed via address search"}
     coords = parcel.get_parcel_geometry_geojson()
     centre_point = parcel.get_center_point_coords_geojson()
     return {
@@ -47,14 +47,13 @@ def return_parcel_from_address(address: str, top_n: int = DEFAULT_POI_LIMIT):
         "nearby_pois": parcel.get_nearby_pois(top_n=top_n),
     }
 
+
 @router.get("/search_cadastre")
 def return_address_from_cadastre(cadastre_code: str, top_n: int = DEFAULT_POI_LIMIT):
     parcel: Parcel = get_parcel_cadastre_series_from_cadastre(cadastre_code)
     logger.debug(parcel)
     if parcel is None:
-        return {
-            "error": "parcel get failed via cadastre search"
-        }
+        return {"error": "parcel get failed via cadastre search"}
     coords = parcel.get_parcel_geometry_geojson()
     centre_point = parcel.get_center_point_coords_geojson()
     return {
