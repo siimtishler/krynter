@@ -48,7 +48,7 @@ POI_CATEGORIES = {
             {
                 "label": "Lastehoid",
                 "limit": 1,
-                "filters": {"alamgrupp": {"lasteaed"}},
+                "filters": {"alamgrupp": {"koolieelne lasteasutus", "lasteaed"}},
             },
             {
                 "label": "Huvikoolid",
@@ -107,7 +107,7 @@ POI_CATEGORIES = {
             },
             {
                 "label": "Pank ja ATM",
-                "limit": 2,
+                "limit": 1,
                 "filters": {"grupp": {"pank"}},
             },
             {
@@ -277,9 +277,8 @@ class GeometryConverter():
                 rows.append(row)
 
         rows.sort(key=lambda row: row["kaugus_m"])
-        total_limit = category.get("total_limit")
-        if total_limit is not None:
-            rows = rows[: max(0, int(total_limit))]
+        total_limit = category.get("total_limit", default_limit)
+        rows = rows[: max(0, int(total_limit))]
 
         return [self._poi_row_to_dict(row) for row in rows]
 
