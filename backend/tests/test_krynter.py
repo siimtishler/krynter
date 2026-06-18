@@ -1,6 +1,6 @@
 import geopandas as gpd
 from fastapi.testclient import TestClient
-from shapely.geometry import Point
+from shapely.geometry import Point, box
 
 from backend.api import api
 from backend.geo.geo import GeometryConverter, Parcel
@@ -165,6 +165,38 @@ def test_daily_services_returns_configured_service_types_not_only_closest_group(
 
     items = result["igapaevateenused"]["items"]
     assert [item["nimi"] for item in items] == ["ATM 1", "Postkontor", "Tankla"]
+
+
+def test_noise_average_returns_upper_bound_for_missing_area():
+    converter = GeometryConverter()
+    parcel = box(0, 0, 10, 10)
+    noise_areas = gpd.GeoDataFrame(
+        [{"MYRAKLASS": 60, "geometry": box(0, 0, 5, 10)}],
+        crs="EPSG:3301",
+    )
+
+    result = converter._average_noise_from_area(noise_areas, parcel)
+
+    assert result["result_type"] == "upper_bound"
+    assert result["avg_db"] is None
+    assert result["avg_db_upper"] == 50.0
+    assert result["mapped_pct"] == 50.0
+    assert result["missing_pct"] == 50.0
+
+
+def test_noise_average_returns_less_than_40_for_no_noise_areas():
+    converter = GeometryConverter()
+    parcel = box(0, 0, 10, 10)
+    noise_areas = gpd.GeoDataFrame(
+        {"MYRAKLASS": [], "geometry": []},
+        crs="EPSG:3301",
+    )
+
+    result = converter._average_noise_from_area(noise_areas, parcel)
+
+    assert result["label"] == "average < 40.0 dB"
+    assert result["mapped_pct"] == 0.0
+    assert result["missing_pct"] == 100.0
 
 
 def test_search_cadastre_includes_nearby_pois(monkeypatch):
