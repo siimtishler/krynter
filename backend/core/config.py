@@ -13,6 +13,7 @@ class Config(BaseSettings):
     poi_file: Path = DATA_DIR / "Tallinn_POIS2.gpkg"
     cadastre_file: Path = DATA_DIR / "Tallinn_KATASTER_GPKG2.gpkg"
     cadastre_vector_file: Path = DATA_DIR / "tallinn_parcels"
+    noise_file: Path = DATA_DIR / "myra_tln.gpkg"
 
 
 config = Config()
