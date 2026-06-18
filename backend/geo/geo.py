@@ -1,11 +1,16 @@
+from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import shapely
 from functools import lru_cache
 from backend.core.logging import logger
 from backend.core.config import config
+from backend.core.utils import time_function
 
 DEFAULT_POI_LIMIT = 3
+DEFAULT_NOISE_BUFFER_M = 20
+NO_DATA_DB_UPPER_BOUND = 40.0
+COVERAGE_TOLERANCE_PCT = 0.01
 POI_FILTER_COLUMNS = ("grupp", "alamgrupp", "poi_type")
 
 # Use filters for one nearest list, or queries when each subtype needs its own limit.
@@ -168,25 +173,17 @@ POI_RESPONSE_COLUMNS = [
 
 
 @lru_cache(maxsize=1)
-def load_tallinn_kataster_file():
+def load_gpkg_file(filename: Path | str) -> gpd.GeoDataFrame:
     try:
-        gd = gpd.read_file(filename=config.cadastre_file)
+        gdf = gpd.read_file(filename=filename)
     except Exception as e:
         logger.error(e)
-    return gd
+    return gdf
 
 
-@lru_cache(maxsize=1)
-def load_tallinn_poi_file():
-    try:
-        gd = gpd.read_file(filename=config.poi_file)
-    except Exception as e:
-        logger.error(e)
-    return gd
-
-
-gd = load_tallinn_kataster_file()
-poigd = load_tallinn_poi_file()
+cadastregdf = load_gpkg_file(config.cadastre_file)
+poigdf = load_gpkg_file(config.poi_file)
+noisegdf = load_gpkg_file(config.noise_file)
 
 
 class GeometryConverter:
@@ -194,21 +191,18 @@ class GeometryConverter:
         self._front_end_crs = config.frontend_crs
         self._data_crs = config.data_crs
 
-    def self_front_end_crs(self, crs: str):
-        self._front_end_crs = crs
-
     def convert_shape_to_front_end_crs_geojson(self, shape: shapely.Polygon) -> dict:
         converted_geometry = gpd.GeoSeries([shape], crs=self._data_crs).to_crs(
             self._front_end_crs
         )
         return shapely.geometry.mapping(converted_geometry.iloc[0])
 
-    def _ensure_poi_crs(self, pois: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-        if pois.crs is None:
-            return pois.set_crs(self._data_crs)
-        if pois.crs != self._data_crs:
-            return pois.to_crs(self._data_crs)
-        return pois
+    def _ensure_gpd_crs(self, gpd: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+        if gpd.crs is None:
+            return gpd.set_crs(self._data_crs)
+        if gpd.crs != self._data_crs:
+            return gpd.to_crs(self._data_crs)
+        return gpd
 
     def _category_filters(self, category_or_query: dict) -> dict:
         if "filters" in category_or_query:
@@ -303,7 +297,7 @@ class GeometryConverter:
         pois: gpd.GeoDataFrame,
         top_n: int = DEFAULT_POI_LIMIT,
     ) -> dict:
-        pois = self._ensure_poi_crs(pois)
+        pois = self._ensure_gpd_crs(pois)
         origin = shapely.centroid(point_or_geometry)
         nearby_pois = {}
 
@@ -320,10 +314,121 @@ class GeometryConverter:
 
         return nearby_pois
 
+    def _clip_noise_areas(
+        self,
+        noise_areas: gpd.GeoDataFrame,
+        geometry: shapely.geometry.base.BaseGeometry,
+    ) -> gpd.GeoDataFrame:
+        clipped = noise_areas.copy()
+        clipped["geometry"] = clipped.geometry.intersection(geometry)
+        clipped = clipped[~clipped.geometry.is_empty].copy()
+        clipped["MYRAKLASS"] = clipped["MYRAKLASS"].astype(float)
+        clipped["area"] = clipped.geometry.area
+        clipped["area_pct"] = 100 * clipped["area"] / geometry.area
+        return clipped
+
+    def get_noise_areas(
+        self,
+        parceldf: gpd.GeoDataFrame,
+        buffered_area_m: float,
+    ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+        """
+        Gets intersection of noise areas with the parcel and buffered parcel area.
+        """
+        parceldf = self._ensure_gpd_crs(parceldf)
+        noise_areas = self._ensure_gpd_crs(noisegdf)
+
+        unbuffered = parceldf.geometry.iloc[0]
+        buffered = unbuffered.buffer(buffered_area_m)
+        idx = noise_areas.sindex.query(buffered, predicate="intersects")
+        candidates = noise_areas.iloc[idx].copy()
+
+        noise_areas_buffered = self._clip_noise_areas(candidates, buffered)
+        noise_areas_unbuffered = self._clip_noise_areas(
+            candidates.loc[candidates.geometry.intersects(unbuffered)],
+            unbuffered,
+        )
+
+        return noise_areas_buffered, noise_areas_unbuffered
+
+    def _average_noise_from_area(
+        self,
+        noise_areas: gpd.GeoDataFrame,
+        geometry: shapely.geometry.base.BaseGeometry,
+        no_data_db_upper_bound: float = NO_DATA_DB_UPPER_BOUND,
+    ) -> dict:
+        geometry_area = float(geometry.area)
+        mapped_area = (
+            float(noise_areas.geometry.area.sum()) if not noise_areas.empty else 0.0
+        )
+        missing_area = max(geometry_area - mapped_area, 0.0)
+        mapped_pct = 100 * mapped_area / geometry_area if geometry_area else 0.0
+        missing_pct = max(100 - mapped_pct, 0.0)
+
+        if geometry_area and not noise_areas.empty:
+            mapped_weighted_db = float(
+                (
+                    (noise_areas.geometry.area / geometry_area)
+                    * noise_areas["MYRAKLASS"]
+                ).sum()
+            )
+        else:
+            mapped_weighted_db = 0.0
+
+        if mapped_pct >= 100 - COVERAGE_TOLERANCE_PCT:
+            avg_db = mapped_weighted_db
+            result_type = "exact"
+            label = f"average = {avg_db:.1f} dB"
+            avg_db_upper = None
+        else:
+            avg_db = None
+            result_type = "upper_bound"
+            avg_db_upper = (
+                mapped_weighted_db
+                + (missing_area / geometry_area) * no_data_db_upper_bound
+            )
+            label = f"average < {avg_db_upper:.1f} dB"
+
+        return {
+            "label": label,
+            "result_type": result_type,
+            "avg_db": avg_db,
+            "avg_db_upper": avg_db_upper,
+            "mapped_pct": mapped_pct,
+            "missing_pct": missing_pct,
+            "area": geometry_area,
+            "mapped_area": mapped_area,
+            "missing_area": missing_area,
+            "mapped_weighted_db": mapped_weighted_db,
+            "no_data_db_upper_bound": no_data_db_upper_bound,
+        }
+
+    def get_surrounding_noise_level(
+        self,
+        parceldf: gpd.GeoDataFrame,
+        buffered_area_m: float = DEFAULT_NOISE_BUFFER_M,
+    ) -> dict:
+        parceldf = self._ensure_gpd_crs(parceldf)
+        unbuffered = parceldf.geometry.iloc[0]
+        buffered = unbuffered.buffer(buffered_area_m)
+        noise_areas_buffered, noise_areas_unbuffered = self.get_noise_areas(
+            parceldf,
+            buffered_area_m,
+        )
+
+        return {
+            "buffer_m": buffered_area_m,
+            "buffered": self._average_noise_from_area(noise_areas_buffered, buffered),
+            "unbuffered": self._average_noise_from_area(
+                noise_areas_unbuffered, unbuffered
+            ),
+        }
+
 
 class Parcel:
-    def __init__(self, parcel: gpd.GeoSeries):
-        self.parcel = parcel
+    def __init__(self, parcel_df: gpd.GeoDataFrame):
+        self.parcel_df = parcel_df
+        self.parcel = parcel_df.iloc[0]
         self.converter = GeometryConverter()
 
     @staticmethod
@@ -344,9 +449,20 @@ class Parcel:
             self.parcel.geometry
         )
 
+    @time_function
     def get_nearby_pois(self, top_n: int = DEFAULT_POI_LIMIT) -> dict:
         return self.converter.get_nearest_pois_by_group(
-            self.parcel.geometry, top_n=top_n, pois=poigd
+            self.parcel.geometry, top_n=top_n, pois=poigdf
+        )
+
+    @time_function
+    def get_surrounding_noise_level(
+        self,
+        buffered_area_m: float = DEFAULT_NOISE_BUFFER_M,
+    ) -> dict:
+        return self.converter.get_surrounding_noise_level(
+            self.parcel_df,
+            buffered_area_m=buffered_area_m,
         )
 
 
@@ -354,30 +470,28 @@ def get_parcel_cadastre_series_from_cadastre(cadastre_code: str) -> Parcel:
     """
     Given the exact address string returns the parcel address
     """
-    matches = gd.loc[gd["tunnus"].eq(cadastre_code)]
+    matches = cadastregdf.loc[cadastregdf["tunnus"].eq(cadastre_code)]
     if matches.empty:
         logger.error("No matches found")
         return None
     elif len(matches) > 1:
         logger.warning("Found more than 1 match")
         return None
-    parcel = matches.iloc[0]
-    return Parcel(parcel=parcel)
+    return Parcel(parcel_df=matches)
 
 
 def get_parcel_cadastre_series_from_address(address: str) -> Parcel:
     """
     Given the exact address string returns the parcel address
     """
-    matches = gd.loc[gd["l_aadress"].eq(address)]
+    matches = cadastregdf.loc[cadastregdf["l_aadress"].eq(address)]
     if matches.empty:
         logger.error("No matches found")
         return None
     elif len(matches) > 1:
         logger.warning("Found more than 1 match")
         return None
-    parcel = matches.iloc[0]
-    return Parcel(parcel=parcel)
+    return Parcel(parcel_df=matches)
 
 
 if __name__ == "__main__":
