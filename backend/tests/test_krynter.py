@@ -72,7 +72,7 @@ def make_parcel() -> Parcel:
         [{"tunnus": "123", "l_aadress": "Test", "geometry": Point(0, 0)}],
         crs="EPSG:3301",
     )
-    return Parcel(parcel_gdf.iloc[0])
+    return Parcel(parcel_gdf)
 
 
 def test_nearest_pois_groups_include_expected_categories():

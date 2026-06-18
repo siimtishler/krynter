@@ -384,8 +384,12 @@ class GeometryConverter:
             avg_db = None
             result_type = "upper_bound"
             avg_db_upper = (
-                mapped_weighted_db
-                + (missing_area / geometry_area) * no_data_db_upper_bound
+                (
+                    mapped_weighted_db
+                    + (missing_area / geometry_area) * no_data_db_upper_bound
+                )
+                if geometry_area
+                else 0.0
             )
             label = f"average < {avg_db_upper:.1f} dB"
 
