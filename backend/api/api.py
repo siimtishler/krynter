@@ -10,35 +10,28 @@ from backend.geo.geo import (
 
 router = APIRouter()
 
-
 @router.get("/")
 def read_root():
     return {"Hello": "World"}
 
 
-@router.get("/search_address")
-def return_parcel_from_address(address: str, top_n: int = DEFAULT_POI_LIMIT):
-    parcel: Parcel = get_parcel_cadastre_series_from_address(address)
-    logger.debug(parcel)
-    if parcel is None:
-        return {"error": "parcel get failed via address search"}
-    return {
-        "Aadress": Parcel.to_dict(parcel.parcel),
-        "nearby_pois": parcel.get_nearby_pois(top_n=top_n),
-        "noise_levels": parcel.get_surrounding_noise_level(20),
-    }
+@router.get("/search")
+def return_parcel_info_from_searchable(type: str, searchable: str, top_n: int = DEFAULT_POI_LIMIT):
+    logger.info([type, searchable])
+    if type == 'address':
+        parcel: Parcel = get_parcel_cadastre_series_from_address(address=searchable)
+    elif type == 'cadastre_code':
+        parcel: Parcel = get_parcel_cadastre_series_from_cadastre(cadastre_code=searchable)
+    else:
+        raise HTTPException(status_code=400, detail=f"Search type {type} not defined")
 
-
-@router.get("/search_cadastre")
-def return_address_from_cadastre(cadastre_code: str, top_n: int = DEFAULT_POI_LIMIT):
-    parcel: Parcel = get_parcel_cadastre_series_from_cadastre(cadastre_code)
     logger.debug(parcel)
     if parcel is None:
         return {"error": "parcel get failed via cadastre search"}
     return {
         "Aadress": Parcel.to_dict(parcel.parcel),
         "nearby_pois": parcel.get_nearby_pois(top_n=top_n),
-        "noise_levels": parcel.get_surrounding_noise_level(20),
+        "noise_levels": parcel.get_surrounding_noise_level(50),
     }
 
 
