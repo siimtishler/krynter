@@ -10,18 +10,23 @@ from backend.geo.geo import (
 
 router = APIRouter()
 
+
 @router.get("/")
 def read_root():
     return {"Hello": "World"}
 
 
 @router.get("/search")
-def return_parcel_info_from_searchable(type: str, searchable: str, top_n: int = DEFAULT_POI_LIMIT):
+def return_parcel_info_from_searchable(
+    type: str, searchable: str, top_n: int = DEFAULT_POI_LIMIT
+):
     logger.info([type, searchable])
-    if type == 'address':
+    if type == "address":
         parcel: Parcel = get_parcel_cadastre_series_from_address(address=searchable)
-    elif type == 'cadastre_code':
-        parcel: Parcel = get_parcel_cadastre_series_from_cadastre(cadastre_code=searchable)
+    elif type == "cadastre_code":
+        parcel: Parcel = get_parcel_cadastre_series_from_cadastre(
+            cadastre_code=searchable
+        )
     else:
         raise HTTPException(status_code=400, detail=f"Search type {type} not defined")
 

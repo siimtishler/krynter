@@ -378,10 +378,7 @@ class GeometryConverter:
         row: pd.Series,
         columns: list[str],
     ) -> dict:
-        result = {
-            column: self._response_value(row.get(column))
-            for column in columns
-        }
+        result = {column: self._response_value(row.get(column)) for column in columns}
         result["geometry"] = self.convert_shape_to_front_end_crs_geojson(row.geometry)
         return result
 
@@ -396,9 +393,7 @@ class GeometryConverter:
         parcel_area_m2 = float(parcel_geometry.area)
         result["intersection_area_m2"] = intersection_area_m2
         result["parcel_coverage_pct"] = (
-            100 * intersection_area_m2 / parcel_area_m2
-            if parcel_area_m2
-            else 0.0
+            100 * intersection_area_m2 / parcel_area_m2 if parcel_area_m2 else 0.0
         )
         return result
 
