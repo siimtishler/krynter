@@ -1,10 +1,10 @@
 import geopandas as gpd
-from fastapi.testclient import TestClient
+import pytest
+from fastapi import HTTPException
 from shapely.geometry import Point, box
 
 from backend.api import api
 from backend.geo.geo import GeometryConverter, Parcel
-from backend.main import app
 
 
 def make_poi_gdf() -> gpd.GeoDataFrame:
@@ -199,6 +199,138 @@ def test_noise_average_returns_less_than_40_for_no_noise_areas():
     assert result["missing_pct"] == 100.0
 
 
+def test_heritage_point_inside_parcel_is_returned():
+    converter = GeometryConverter()
+    parcel = box(0, 0, 10, 10)
+    heritage_pois = gpd.GeoDataFrame(
+        [
+            {
+                "id": "inside",
+                "vid": "1",
+                "nimetus": "Inside object",
+                "klass": "KULTM",
+                "kpo_liik_kood_vaartus": "EHITISMALESTIS",
+                "alagrupp_vaartus": "Muinsuskaitse",
+                "nahtus_id_vaartus": "Kinnismälestis",
+                "geometry": Point(5, 5),
+            },
+            {
+                "id": "outside",
+                "vid": "2",
+                "nimetus": "Outside object",
+                "klass": "KULTM",
+                "kpo_liik_kood_vaartus": "EHITISMALESTIS",
+                "alagrupp_vaartus": "Muinsuskaitse",
+                "nahtus_id_vaartus": "Kinnismälestis",
+                "geometry": Point(20, 20),
+            },
+        ],
+        crs="EPSG:3301",
+    )
+
+    result = converter.get_overlapping_heritage_pois(parcel, heritage_pois)
+
+    assert result["count"] == 1
+    assert result["items"][0]["id"] == "inside"
+    assert result["items"][0]["geometry"]["type"] == "Point"
+
+
+def test_restriction_area_intersection_includes_metrics():
+    converter = GeometryConverter()
+    parcel = box(0, 0, 10, 10)
+    restriction_areas = gpd.GeoDataFrame(
+        [
+            {
+                "nimi": "Half overlap",
+                "klass": "KOBP",
+                "nahtus_id_vaartus": "Nature",
+                "voond_liik_id_vaartus": "Restriction",
+                "reegel": "Rule",
+                "maksusoodustus": "50",
+                "kitsenduse_objekti_vid": "KLO1",
+                "kpois_viide": "https://example.test/restriction",
+                "layer": "restriction",
+                "geometry": box(0, 0, 5, 10),
+            },
+            {
+                "nimi": "Outside",
+                "klass": "KOBP",
+                "nahtus_id_vaartus": "Nature",
+                "voond_liik_id_vaartus": "Restriction",
+                "reegel": "Rule",
+                "maksusoodustus": "50",
+                "kitsenduse_objekti_vid": "KLO2",
+                "kpois_viide": "https://example.test/outside",
+                "layer": "restriction",
+                "geometry": box(20, 20, 30, 30),
+            },
+        ],
+        crs="EPSG:3301",
+    )
+
+    result = converter.get_overlapping_restriction_areas(parcel, restriction_areas)
+
+    assert result["count"] == 1
+    assert result["items"][0]["nimi"] == "Half overlap"
+    assert result["items"][0]["intersection_area_m2"] == 50.0
+    assert result["items"][0]["parcel_coverage_pct"] == 50.0
+    assert result["items"][0]["geometry"]["type"] == "Polygon"
+
+
+def test_detail_plan_intersection_returns_expected_fields():
+    converter = GeometryConverter()
+    parcel = box(0, 0, 10, 10)
+    detail_plans = gpd.GeoDataFrame(
+        [
+            {
+                "sysid": 1,
+                "planid": 2,
+                "kovid": "DP001",
+                "plannim": "Test detail plan",
+                "korraldaja": "Tallinn",
+                "planseis_nimi": "kehtiv",
+                "planeesm": "Purpose",
+                "planviide": "https://example.test/plan",
+                "algatkp_timeposition": "2020-01-01",
+                "vastuvkp_timeposition": "2020-02-01",
+                "kehtestkp_timeposition": "2020-03-01",
+                "url": "https://example.test/detail",
+                "failid": "https://example.test/files",
+                "geometry": box(5, 0, 15, 10),
+            }
+        ],
+        crs="EPSG:3301",
+    )
+
+    result = converter.get_overlapping_detail_plans(parcel, detail_plans)
+
+    assert result["count"] == 1
+    assert result["items"][0]["plannim"] == "Test detail plan"
+    assert result["items"][0]["intersection_area_m2"] == 50.0
+    assert result["items"][0]["parcel_coverage_pct"] == 50.0
+
+
+def test_empty_spatial_matches_return_empty_items():
+    converter = GeometryConverter()
+    parcel = box(0, 0, 10, 10)
+    empty_heritage = gpd.GeoDataFrame({"geometry": []}, crs="EPSG:3301")
+    empty_restrictions = gpd.GeoDataFrame({"geometry": []}, crs="EPSG:3301")
+    empty_detail_plans = gpd.GeoDataFrame({"geometry": []}, crs="EPSG:3301")
+
+    assert converter.get_overlapping_heritage_pois(parcel, empty_heritage) == {
+        "count": 0,
+        "items": [],
+    }
+    assert converter.get_overlapping_restriction_areas(parcel, empty_restrictions) == {
+        "count": 0,
+        "items": [],
+    }
+    assert converter.get_overlapping_detail_plans(parcel, empty_detail_plans) == {
+        "count": 0,
+        "items": [],
+    }
+
+
 def test_search_cadastre_includes_nearby_pois(monkeypatch):
     monkeypatch.setattr(
         api,
@@ -210,12 +342,30 @@ def test_search_cadastre_includes_nearby_pois(monkeypatch):
         "get_nearby_pois",
         lambda self, top_n=3: {"sport_ja_liikumine": {"label": "Sport", "items": []}},
     )
+    monkeypatch.setattr(
+        Parcel,
+        "get_surrounding_noise_level",
+        lambda self, buffered_area_m=20: {"buffer_m": buffered_area_m},
+    )
+    monkeypatch.setattr(
+        Parcel,
+        "get_spatial_context",
+        lambda self: {
+            "heritage_pois": {"count": 0, "items": []},
+            "restriction_areas": {"count": 0, "items": []},
+            "detail_plans": {"count": 0, "items": []},
+        },
+    )
 
-    client = TestClient(app)
-    response = client.get("/api/search_cadastre", params={"cadastre_code": "123"})
+    body = api.return_parcel_info_from_searchable(
+        type="cadastre_code",
+        searchable="123",
+    )
 
-    assert response.status_code == 200
-    assert "nearby_pois" in response.json()
+    assert "nearby_pois" in body
+    assert body["heritage_pois"] == {"count": 0, "items": []}
+    assert body["restriction_areas"] == {"count": 0, "items": []}
+    assert body["detail_plans"] == {"count": 0, "items": []}
 
 
 def test_nearby_pois_endpoint_returns_grouped_pois(monkeypatch):
@@ -230,11 +380,9 @@ def test_nearby_pois_endpoint_returns_grouped_pois(monkeypatch):
         lambda self, top_n=3: {"sport_ja_liikumine": {"label": "Sport", "items": []}},
     )
 
-    client = TestClient(app)
-    response = client.get("/api/nearby_pois", params={"cadastre_code": "123"})
+    response = api.return_nearby_pois_from_cadastre(cadastre_code="123")
 
-    assert response.status_code == 200
-    assert response.json()["nearby_pois"] == {
+    assert response["nearby_pois"] == {
         "sport_ja_liikumine": {"label": "Sport", "items": []}
     }
 
@@ -246,7 +394,7 @@ def test_nearby_pois_endpoint_returns_404_for_missing_cadastre(monkeypatch):
         lambda cadastre_code: None,
     )
 
-    client = TestClient(app)
-    response = client.get("/api/nearby_pois", params={"cadastre_code": "missing"})
+    with pytest.raises(HTTPException) as exc_info:
+        api.return_nearby_pois_from_cadastre(cadastre_code="missing")
 
-    assert response.status_code == 404
+    assert exc_info.value.status_code == 404
