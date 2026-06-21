@@ -32,6 +32,9 @@ def return_parcel_info_from_searchable(type: str, searchable: str, top_n: int = 
         "Aadress": Parcel.to_dict(parcel.parcel),
         "nearby_pois": parcel.get_nearby_pois(top_n=top_n),
         "noise_levels": parcel.get_surrounding_noise_level(50),
+        "heritage_pois": parcel.get_heritage_pois(),
+        "restriction_areas": parcel.get_restriction_areas(),
+        "detail_plans": parcel.get_detail_plans(),
     }
 
 

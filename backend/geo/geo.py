@@ -171,6 +171,44 @@ POI_RESPONSE_COLUMNS = [
     "poi_type",
 ]
 
+HERITAGE_POI_RESPONSE_COLUMNS = [
+    "id",
+    "vid",
+    "nimetus",
+    "klass",
+    "kpo_liik_kood_vaartus",
+    "alagrupp_vaartus",
+    "nahtus_id_vaartus",
+]
+
+RESTRICTION_AREA_RESPONSE_COLUMNS = [
+    "nimi",
+    "klass",
+    "nahtus_id_vaartus",
+    "voond_liik_id_vaartus",
+    "reegel",
+    "maksusoodustus",
+    "kitsenduse_objekti_vid",
+    "kpois_viide",
+    "layer",
+]
+
+DETAIL_PLAN_RESPONSE_COLUMNS = [
+    "sysid",
+    "planid",
+    "kovid",
+    "plannim",
+    "korraldaja",
+    "planseis_nimi",
+    "planeesm",
+    "planviide",
+    "algatkp_timeposition",
+    "vastuvkp_timeposition",
+    "kehtestkp_timeposition",
+    "url",
+    "failid",
+]
+
 
 @lru_cache(maxsize=1)
 def load_gpkg_file(filename: Path | str) -> gpd.GeoDataFrame:
@@ -184,6 +222,9 @@ def load_gpkg_file(filename: Path | str) -> gpd.GeoDataFrame:
 cadastregdf = load_gpkg_file(config.cadastre_file)
 poigdf = load_gpkg_file(config.poi_file)
 noisegdf = load_gpkg_file(config.noise_file)
+heritage_poisgdf = load_gpkg_file(config.heritage_poi_file)
+restriction_areasgdf = load_gpkg_file(config.restriction_areas_file)
+detail_plansgdf = load_gpkg_file(config.detail_plans_file)
 
 
 class GeometryConverter:
@@ -281,15 +322,131 @@ class GeometryConverter:
     def _poi_row_to_dict(self, poi: pd.Series) -> dict:
         result = {}
         for column in POI_RESPONSE_COLUMNS:
-            value = poi.get(column)
-            if pd.isna(value):
-                value = None
-            elif column == "kaugus_m":
+            value = self._response_value(poi.get(column))
+            if column == "kaugus_m" and value is not None:
                 value = float(value)
             result[column] = value
 
         result["geometry"] = self.convert_shape_to_front_end_crs_geojson(poi.geometry)
         return result
+
+    def _response_value(self, value):
+        if value is None:
+            return None
+
+        try:
+            is_missing = pd.isna(value)
+        except TypeError:
+            is_missing = False
+
+        if not hasattr(is_missing, "__len__"):
+            try:
+                if bool(is_missing):
+                    return None
+            except TypeError:
+                pass
+
+        if isinstance(value, pd.Timestamp):
+            return value.isoformat()
+
+        if hasattr(value, "item") and not isinstance(value, (str, bytes)):
+            try:
+                return value.item()
+            except ValueError:
+                return value
+
+        return value
+
+    def _spatial_intersections(
+        self,
+        geometry: shapely.geometry.base.BaseGeometry,
+        source_gdf: gpd.GeoDataFrame,
+    ) -> gpd.GeoDataFrame:
+        source_gdf = self._ensure_gpd_crs(source_gdf)
+        if source_gdf.empty:
+            return source_gdf.copy()
+
+        idx = source_gdf.sindex.query(geometry, predicate="intersects")
+        candidates = source_gdf.iloc[idx].copy()
+        if candidates.empty:
+            return candidates
+
+        return candidates.loc[candidates.geometry.intersects(geometry)].copy()
+
+    def _row_to_spatial_dict(
+        self,
+        row: pd.Series,
+        columns: list[str],
+    ) -> dict:
+        result = {
+            column: self._response_value(row.get(column))
+            for column in columns
+        }
+        result["geometry"] = self.convert_shape_to_front_end_crs_geojson(row.geometry)
+        return result
+
+    def _polygon_overlap_row_to_dict(
+        self,
+        row: pd.Series,
+        parcel_geometry: shapely.geometry.base.BaseGeometry,
+        columns: list[str],
+    ) -> dict:
+        result = self._row_to_spatial_dict(row, columns)
+        intersection_area_m2 = float(row.geometry.intersection(parcel_geometry).area)
+        parcel_area_m2 = float(parcel_geometry.area)
+        result["intersection_area_m2"] = intersection_area_m2
+        result["parcel_coverage_pct"] = (
+            100 * intersection_area_m2 / parcel_area_m2
+            if parcel_area_m2
+            else 0.0
+        )
+        return result
+
+    def get_overlapping_heritage_pois(
+        self,
+        parcel_geometry: shapely.geometry.base.BaseGeometry,
+        heritage_pois: gpd.GeoDataFrame,
+    ) -> dict:
+        matches = self._spatial_intersections(parcel_geometry, heritage_pois)
+        items = [
+            self._row_to_spatial_dict(row, HERITAGE_POI_RESPONSE_COLUMNS)
+            for _, row in matches.iterrows()
+        ]
+        return items
+
+    def get_overlapping_restriction_areas(
+        self,
+        parcel_geometry: shapely.geometry.base.BaseGeometry,
+        restriction_areas: gpd.GeoDataFrame,
+    ) -> dict:
+        matches = self._spatial_intersections(parcel_geometry, restriction_areas)
+        items = [
+            self._polygon_overlap_row_to_dict(
+                row,
+                parcel_geometry,
+                RESTRICTION_AREA_RESPONSE_COLUMNS,
+            )
+            for _, row in matches.iterrows()
+        ]
+        items.sort(key=lambda item: item["intersection_area_m2"], reverse=True)
+        return items
+
+    def get_overlapping_detail_plans(
+        self,
+        parcel_geometry: shapely.geometry.base.BaseGeometry,
+        detail_plans: gpd.GeoDataFrame,
+    ) -> dict:
+        matches = self._spatial_intersections(parcel_geometry, detail_plans)
+        items = [
+            self._polygon_overlap_row_to_dict(
+                row,
+                parcel_geometry,
+                DETAIL_PLAN_RESPONSE_COLUMNS,
+            )
+            for _, row in matches.iterrows()
+        ]
+        items.sort(key=lambda item: item["intersection_area_m2"], reverse=True)
+        return items
 
     def get_nearest_pois_by_group(
         self,
@@ -467,6 +624,27 @@ class Parcel:
         return self.converter.get_surrounding_noise_level(
             self.parcel_df,
             buffered_area_m=buffered_area_m,
+        )
+
+    @time_function
+    def get_heritage_pois(self) -> dict:
+        return self.converter.get_overlapping_heritage_pois(
+            self.parcel.geometry,
+            heritage_poisgdf,
+        )
+
+    @time_function
+    def get_restriction_areas(self) -> dict:
+        return self.converter.get_overlapping_restriction_areas(
+            self.parcel.geometry,
+            restriction_areasgdf,
+        )
+
+    @time_function
+    def get_detail_plans(self) -> dict:
+        return self.converter.get_overlapping_detail_plans(
+            self.parcel.geometry,
+            detail_plansgdf,
         )
 
 

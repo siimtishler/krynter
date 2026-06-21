@@ -10,10 +10,13 @@ class Config(BaseSettings):
     frontend_crs: str = "EPSG:4326"
     data_crs: str = "EPSG:3301"
     app_debug: bool = True
+    cadastre_vector_file: Path = DATA_DIR / "tallinn_parcels"
     poi_file: Path = DATA_DIR / "Tallinn_POIS2.gpkg"
     cadastre_file: Path = DATA_DIR / "Tallinn_KATASTER_GPKG2.gpkg"
-    cadastre_vector_file: Path = DATA_DIR / "tallinn_parcels"
     noise_file: Path = DATA_DIR / "myra_tln.gpkg"
+    heritage_poi_file: Path = DATA_DIR / "muinsuskaitse_poi.gpkg"
+    restriction_areas_file: Path = DATA_DIR / "restriction_areas.gpkg"
+    detail_plans_file: Path = DATA_DIR / "detail_plans_tln.gpkg"
 
 
 config = Config()
