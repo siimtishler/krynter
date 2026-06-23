@@ -17,6 +17,7 @@ class Config(BaseSettings):
     heritage_poi_file: Path = DATA_DIR / "muinsuskaitse_poi.gpkg"
     restriction_areas_file: Path = DATA_DIR / "restriction_areas.gpkg"
     detail_plans_file: Path = DATA_DIR / "detail_plans_tln.gpkg"
+    detail_plan_download_dir: Path = DATA_DIR / "detail_downloads"
 
 
 config = Config()
