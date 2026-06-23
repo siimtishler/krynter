@@ -6,6 +6,7 @@ import geopandas as gpd
 import pandas as pd
 
 from backend.geo.constants import (
+    DETAIL_PLAN_MIN_COVERAGE_PCT,
     DETAIL_PLAN_RESPONSE_COLUMNS,
     HERITAGE_POI_RESPONSE_COLUMNS,
     RESTRICTION_AREA_RESPONSE_COLUMNS,
@@ -89,8 +90,14 @@ def get_overlapping_detail_plans(
 ) -> dict:
     """Return detailed plans intersecting a parcel, sorted by overlap area."""
     source = get_detail_plans() if detail_plans is None else detail_plans
-    return _polygon_overlay_response(
+    response = _polygon_overlay_response(
         parcel_geometry,
         source,
         DETAIL_PLAN_RESPONSE_COLUMNS,
     )
+    items = [
+        item
+        for item in response["items"]
+        if item["parcel_coverage_pct"] >= DETAIL_PLAN_MIN_COVERAGE_PCT
+    ]
+    return spatial_match_response(items)

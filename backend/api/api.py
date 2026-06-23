@@ -1,6 +1,10 @@
 from fastapi import APIRouter, HTTPException
 
 from backend.core.logging import logger
+from backend.detailplan_analyzer.analyzer import (
+    analyze_detail_plan,
+    highest_overlap_detail_plan,
+)
 from backend.geo import (
     DEFAULT_POI_LIMIT,
     Parcel,
@@ -37,6 +41,47 @@ def return_parcel_info_from_searchable(
         "noise_levels": parcel.get_surrounding_noise_level(50),
         **parcel.get_spatial_context(),
     }
+
+
+@router.get("/detail-plan-analysis")
+def return_detail_plan_analysis(
+    type: str,
+    searchable: str,
+    force_refresh: bool = False,
+):
+    logger.info(
+        "detail-plan-analysis request type=%s searchable=%s force_refresh=%s",
+        type,
+        searchable,
+        force_refresh,
+    )
+    if type == "address":
+        parcel: Parcel | None = find_parcel_by_address(address=searchable)
+    elif type == "cadastre_code":
+        parcel: Parcel | None = find_parcel_by_cadastre_code(cadastre_code=searchable)
+    else:
+        raise HTTPException(status_code=400, detail=f"Search type {type} not defined")
+
+    if parcel is None:
+        raise HTTPException(status_code=404, detail="Parcel not found")
+
+    address = parcel.attributes().get("l_aadress") or searchable
+    detail_plan = highest_overlap_detail_plan(parcel)
+    if detail_plan is None:
+        raise HTTPException(status_code=404, detail="Detail plan not found")
+
+    result = analyze_detail_plan(
+        detail_plan=detail_plan,
+        address=address,
+        force_refresh=force_refresh,
+    )
+    logger.info(
+        "detail-plan-analysis response status=%s chunks=%s setup_issues=%s",
+        result.status,
+        result.meta.chunks_sent,
+        result.setup_issues,
+    )
+    return result.model_dump(mode="json")
 
 
 @router.get("/nearby_pois")
