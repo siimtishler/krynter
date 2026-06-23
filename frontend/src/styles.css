@@ -87,6 +87,28 @@ body {
   margin-top: 2px;
 }
 
+.analysis-panel {
+  border-top: 1px solid #e5e7eb;
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.analysis-button {
+  cursor: pointer;
+}
+
+.analysis-output {
+  display: block;
+  width: 100%;
+  min-height: 220px;
+  margin-top: 8px;
+  resize: vertical;
+  border: 1px solid #d1d5db;
+  padding: 8px;
+  font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre;
+}
+
 * {
   box-sizing: border-box;
 }

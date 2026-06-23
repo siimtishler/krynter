@@ -9,3 +9,11 @@ export async function searchForParcel(searchInput) {
 
 	return apiGet(`/api/search?${queryType}&${query}`)
 }
+
+export async function analyzeDetailPlan(searchInput) {
+	const searchInputClassified = classifyParcelSearchInput(searchInput)
+	const query = new URLSearchParams({ searchable: searchInputClassified.value })
+	const queryType = new URLSearchParams({ type: searchInputClassified.type })
+
+	return apiGet(`/api/detail-plan-analysis?${queryType}&${query}`)
+}

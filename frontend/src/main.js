@@ -1,5 +1,5 @@
 import './styles.css'
-import { searchForParcel } from "./api/parcels.js"
+import { analyzeDetailPlan, searchForParcel } from "./api/parcels.js"
 import { getRequiredElement } from "./utils/utils.js"
 import { createMap } from "./map/map.js"
 
@@ -74,7 +74,42 @@ function appendResultSection(parent, title, group, metaFields) {
     }
 }
 
-function renderParcelResponse(response) {
+function appendDetailPlanAnalysis(parent, detailPlans, searchValue) {
+    if (!detailPlans?.items?.length) {
+        return
+    }
+
+    const container = document.createElement('div')
+    container.className = 'analysis-panel'
+    parent.appendChild(container)
+
+    const button = document.createElement('button')
+    button.className = 'analysis-button'
+    button.type = 'button'
+    button.textContent = 'analüüsi'
+    container.appendChild(button)
+
+    const output = document.createElement('textarea')
+    output.className = 'analysis-output'
+    output.readOnly = true
+    output.placeholder = 'Analüüsi tulemus ilmub siia.'
+    container.appendChild(output)
+
+    button.addEventListener('click', async () => {
+        button.disabled = true
+        output.value = 'Analüüsin detailplaneeringu PDFi...'
+        try {
+            const result = await analyzeDetailPlan(searchValue)
+            output.value = JSON.stringify(result, null, 2)
+        } catch (error) {
+            output.value = error.message
+        } finally {
+            button.disabled = false
+        }
+    })
+}
+
+function renderParcelResponse(response, searchValue) {
     resultsPanel.replaceChildren()
 
     if (response.error) {
@@ -111,13 +146,14 @@ function renderParcelResponse(response) {
         response.detail_plans,
         ['kovid', 'planseis_nimi', 'kehtestkp_timeposition']
     )
+    appendDetailPlanAnalysis(resultsPanel, response.detail_plans, searchValue)
 }
 
 async function handleParcelSearch(value) {
     searchButton.disabled = true
     try {
         const response = await searchForParcel(value)
-        renderParcelResponse(response)
+        renderParcelResponse(response, value)
     } catch (error) {
         resultsPanel.replaceChildren()
         appendText(resultsPanel, 'p', error.message, 'results-empty')
