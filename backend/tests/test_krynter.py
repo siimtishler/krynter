@@ -319,6 +319,35 @@ def test_detail_plan_intersection_returns_expected_fields():
     assert result["items"][0]["parcel_coverage_pct"] == 50.0
 
 
+def test_detail_plan_intersection_filters_tiny_overlap():
+    parcel = box(0, 0, 10, 10)
+    detail_plans = gpd.GeoDataFrame(
+        [
+            {
+                "sysid": 1,
+                "planid": 2,
+                "kovid": "DP001",
+                "plannim": "Tiny overlap",
+                "korraldaja": "Tallinn",
+                "planseis_nimi": "kehtiv",
+                "planeesm": "Purpose",
+                "planviide": "https://example.test/plan",
+                "algatkp_timeposition": "2020-01-01",
+                "vastuvkp_timeposition": "2020-02-01",
+                "kehtestkp_timeposition": "2020-03-01",
+                "url": "https://example.test/detail",
+                "failid": "https://example.test/files",
+                "geometry": box(9.5, 9.5, 20, 20),
+            }
+        ],
+        crs="EPSG:3301",
+    )
+
+    result = get_overlapping_detail_plans(parcel, detail_plans)
+
+    assert result == {"count": 0, "items": []}
+
+
 def test_empty_spatial_matches_return_empty_items():
     parcel = box(0, 0, 10, 10)
     empty_heritage = gpd.GeoDataFrame({"geometry": []}, crs="EPSG:3301")
