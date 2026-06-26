@@ -38,6 +38,12 @@ class RegexCandidate(BaseModel):
     source_type: SourceType = SourceType.REGEX
     pattern_name: str
     evidence: Evidence
+    rank: int | None = None
+    score: float | None = None
+    quality: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+    flags: list[str] = Field(default_factory=list)
+    context: str | None = None
 
 
 class ReviewItem(BaseModel):

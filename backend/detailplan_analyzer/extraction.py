@@ -53,6 +53,80 @@ class TextChunk:
     text: str
     score: int
     reasons: list[str]
+    field_key: str | None = None
+
+
+FIELD_WINDOW_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "krundi_pind_m2": (
+        "krundi pind",
+        "krundi pindala",
+        "krundi suurus",
+        "kinnistu suurus",
+        "maaüksuse pindala",
+        "pindala",
+    ),
+    "taisehitus_pct": (
+        "täisehitus",
+        "täisehituse",
+        "hoonestustihedus",
+    ),
+    "brutopind_m2": (
+        "brutopind",
+        "bruto pind",
+        "suletud brutopind",
+    ),
+    "ehitusalune_pind_m2": (
+        "ehitusalune pind",
+        "ehitisealune pind",
+        "hoonete alune pind",
+    ),
+    "lubatud_korrused": (
+        "korruselisus",
+        "korruste arv",
+        "maapealne korruselisus",
+        "maa-alune korruselisus",
+        "korruseline",
+        "korrust",
+    ),
+    "lubatud_majade_ehitamise_arv": (
+        "lubatud hoonete arv",
+        "lubatud majade arv",
+        "lubatud ehitada",
+    ),
+    "hoonete_lubatud_korgused_m": (
+        "hoonestuse kõrgus",
+        "hoone kõrgus",
+        "maksimaalne kõrgus",
+        "suurim kõrgus",
+        "lubatud kõrgus",
+    ),
+    "hoonete_arv": (
+        "hoonete arv",
+        "planeeritud hoonet",
+        "hoonete suurim lubatud arv",
+    ),
+    "kasutusotstarve": (
+        "sihtotstarve",
+        "kasutusotstarve",
+        "maa kasutamise sihtotstarve",
+    ),
+    "katusekalle": (
+        "katusekalle",
+        "katuse kalle",
+    ),
+    "tulepusivusklass": (
+        "tulepüsivus",
+        "tulepüsivusklass",
+        "tulepüsivusaste",
+        "tp-",
+    ),
+    "omandivorm": (
+        "omandivorm",
+        "eraomand",
+        "munitsipaalomand",
+        "riigiomand",
+    ),
+}
 
 
 def normalize_planning_text(text: str) -> str:
@@ -295,6 +369,89 @@ def select_relevant_chunks(
     logger.debug(
         f"Selected chunks: {selected_chunks}",
     )
+    return chunks
+
+
+def _field_window_score(text: str, keyword: str) -> int:
+    low = text.lower()
+    score = 30
+    if keyword in low:
+        score += 10
+    for boost in (
+        "ehitusõigus",
+        "hoonestustingimused",
+        "krundi ehitusõigus",
+        "põhinäitajad",
+        "lubatud",
+        "suurim",
+        "maksimaalne",
+    ):
+        if boost in low:
+            score += 6
+    if "sisukord" in low or text.count("....") > 3:
+        score -= 25
+    return score
+
+
+@time_function
+def select_field_evidence_chunks(
+    pages: list[PageText],
+    max_windows_per_field: int = 4,
+    context_lines: int = 3,
+    max_chars: int = 1200,
+) -> list[TextChunk]:
+    chunks: list[TextChunk] = []
+    for field_key, keywords in FIELD_WINDOW_KEYWORDS.items():
+        field_chunks: list[TextChunk] = []
+        seen: set[tuple[str, int, str]] = set()
+        for page in pages:
+            lines = page.normalized_text.splitlines()
+            if not lines:
+                continue
+            low_lines = [line.lower() for line in lines]
+            for index, low_line in enumerate(low_lines):
+                keyword = next(
+                    (item for item in keywords if item in low_line),
+                    None,
+                )
+                if keyword is None:
+                    continue
+
+                start = max(0, index - context_lines)
+                end = min(len(lines), index + context_lines + 1)
+                text = "\n".join(lines[start:end]).strip()[:max_chars]
+                normalized_key = re.sub(r"\s+", " ", text.lower())[:700]
+                key = (page.pdf_path.name, page.page, normalized_key)
+                if not text or key in seen:
+                    continue
+                seen.add(key)
+                field_chunks.append(
+                    TextChunk(
+                        pdf_path=page.pdf_path,
+                        page=page.page,
+                        text=text,
+                        score=_field_window_score(text, keyword),
+                        reasons=[f"field:{field_key}", f"keyword:{keyword}"],
+                        field_key=field_key,
+                    )
+                )
+
+        field_chunks.sort(key=lambda item: (-item.score, item.pdf_path.name, item.page))
+        chunks.extend(field_chunks[:max_windows_per_field])
+
+    selected = [
+        {
+            "pdf": chunk.pdf_path.name,
+            "page": chunk.page,
+            "field_key": chunk.field_key,
+            "score": chunk.score,
+            "reasons": chunk.reasons,
+            "chars": len(chunk.text),
+            "snippet": chunk.text[:220],
+        }
+        for chunk in chunks
+    ]
+    logger.debug(f"Selected field evidence chunks: {selected}")
     return chunks
 
 

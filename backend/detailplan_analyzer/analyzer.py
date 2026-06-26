@@ -13,6 +13,7 @@ from backend.detailplan_analyzer.extraction import (
     extract_pages_cached,
     find_address_lines,
     prepare_pdf_for_text,
+    select_field_evidence_chunks,
     select_relevant_chunks,
 )
 from backend.detailplan_analyzer.models import (
@@ -136,10 +137,13 @@ def analyze_pdfs(
         )
 
     chunks = select_relevant_chunks(pages, address)
+    field_chunks = select_field_evidence_chunks(pages)
+    chunks.extend(field_chunks)
     meta.chunks_sent = len(chunks)
     logger.info(
         f"Chunk selection complete address={address} "
-        f"page_count={len(pages)} chunk_count={len(chunks)}"
+        f"page_count={len(pages)} chunk_count={len(chunks)} "
+        f"field_chunk_count={len(field_chunks)}"
     )
     find_address_lines(pages, address)
 

@@ -68,6 +68,7 @@ def parse_land_use(value: str) -> str:
 
     cleaned = re.split(r"\s+ei\s+", cleaned, maxsplit=1, flags=re.IGNORECASE)[0]
     cleaned = parse_text(cleaned)
+    cleaned = re.sub(r"^on\s+", "", cleaned, flags=re.IGNORECASE)
     if not cleaned:
         raise ValueError("Empty land-use value")
     return normalize_land_use_text(cleaned)
@@ -103,11 +104,82 @@ def _line_for_match(text: str, match: re.Match) -> str:
     return text[start:end].strip()[:700]
 
 
+def _context_for_match(
+    text: str,
+    match: re.Match,
+    context_lines: int = 3,
+    max_chars: int = 1200,
+) -> str:
+    lines = text.splitlines()
+    if not lines:
+        return text[:max_chars]
+
+    line_index = 0
+    offset = 0
+    for index, line in enumerate(lines):
+        line_end = offset + len(line)
+        if offset <= match.start() <= line_end:
+            line_index = index
+            break
+        offset = line_end + 1
+
+    start = max(0, line_index - context_lines)
+    end = min(len(lines), line_index + context_lines + 1)
+    return "\n".join(lines[start:end]).strip()[:max_chars]
+
+
 def _raw_value(match: re.Match) -> str:
     groupdict = match.groupdict()
     if "value" in groupdict and groupdict["value"] is not None:
         return groupdict["value"]
     return match.group(1)
+
+
+ESTONIAN_NUMBER_WORDS = (
+    "üks",
+    "uhe",
+    "ühe",
+    "kaks",
+    "kahe",
+    "kahte",
+    "kolm",
+    "kolme",
+    "neli",
+    "nelja",
+    "viis",
+    "viie",
+    "kuus",
+    "kuue",
+    "seitse",
+    "seitsme",
+    "kaheksa",
+    "üheksa",
+    "uheksa",
+    "kümme",
+    "kumme",
+)
+
+
+def _has_amount_text(value: Any) -> bool:
+    low = str(value).lower()
+    return bool(re.search(r"\d", low)) or any(
+        word in low for word in ESTONIAN_NUMBER_WORDS
+    )
+
+
+def _candidate_is_parseable_for_field(
+    spec: FieldSpec, value: Any, context: str
+) -> bool:
+    if spec.key == "lubatud_korrused":
+        return _has_amount_text(value)
+    if spec.key == "hoonete_lubatud_korgused_m":
+        low = str(value).lower()
+        if not re.search(r"\d", low):
+            return False
+        if "kõrgus" in low and not re.search(r"\d+(?:[,.]\d+)?\s*m\b", low):
+            return False
+        return True
+    return True
 
 
 def _candidate_from_match(
@@ -117,11 +189,18 @@ def _candidate_from_match(
     match: re.Match,
 ) -> RegexCandidate | None:
     raw = _raw_value(match)
+    context = _context_for_match(chunk.text, match)
     try:
         value = spec.parser(raw) if spec.parser else parse_text(raw)
     except (TypeError, ValueError):
         logger.debug(
             f"Skipping regex candidate field={spec.key} pattern={regex.name} raw={raw}"
+        )
+        return None
+    if not _candidate_is_parseable_for_field(spec, value, context):
+        logger.debug(
+            f"Skipping unparseable candidate field={spec.key} "
+            f"pattern={regex.name} raw={raw}"
         )
         return None
 
@@ -138,20 +217,236 @@ def _candidate_from_match(
             page=chunk.page,
             text=_line_for_match(chunk.text, match),
         ),
+        reasons=list(chunk.reasons),
+        context=context,
     )
 
 
-def _best_candidate(candidates: list[RegexCandidate]) -> RegexCandidate | None:
-    if not candidates:
-        return None
-    return sorted(
-        candidates,
+STRONG_CONTEXT_TERMS = (
+    "ehitusõigus",
+    "hoonestustingimused",
+    "krundi ehitusõigus",
+    "põhinäitajad",
+    "lubatud",
+    "suurim",
+    "maksimaalne",
+    "max",
+)
+
+WEAK_CONTEXT_TERMS = (
+    "olemasolev",
+    "olemasoleva",
+    "kontaktvöönd",
+    "kontaktvöön",
+    "naaber",
+    "piirdeaed",
+    "piirdeai",
+    "servituut",
+    "sisukord",
+    "üldplaneering",
+    "visioon",
+)
+
+FIELD_WEAK_CONTEXT_TERMS: dict[str, tuple[str, ...]] = {
+    "lubatud_korrused": (
+        "vaated",
+        "kõrghaljastus",
+        "kontaktvöönd",
+        "naaber",
+        "visioon",
+    ),
+    "hoonete_lubatud_korgused_m": (
+        "piirdeaed",
+        "piirdeai",
+        "piire",
+        "hekk",
+        "traatvõrk",
+        "võrkai",
+        "võrgust",
+        "võrkaed",
+        "tagasi",
+        "tagasiaste",
+        "maapinnast on 1",
+    ),
+    "kasutusotstarve": (
+        "senine sihtotstarve",
+        "olemasolev sihtotstarve",
+        "sihtotstarvete kaupa",
+    ),
+}
+
+
+FIELD_STRONG_CONTEXT_TERMS: dict[str, tuple[str, ...]] = {
+    "taisehitus_pct": (
+        "kavandatud täisehitus",
+        "täisehitus %",
+        "täisehituse protsent",
+    ),
+    "hoonete_lubatud_korgused_m": (
+        "hoonete lubatud suurim kõrgus",
+        "maksimaalne kõrgus",
+        "hoone maksimaalne kõrgus",
+        "hoone max",
+        "lubatud suurim kõrgus",
+        "suurim kõrgus",
+    ),
+    "katusekalle": (
+        "lubatud katusekalded",
+        "katusekalle",
+        "katuse kalle",
+    ),
+    "tulepusivusklass": (
+        "tulepüsivusklassiks",
+        "tulepüsivusklass",
+        "tulepüsivusaste",
+        "planeeritud",
+    ),
+}
+
+
+def _candidate_value_key(candidate: RegexCandidate) -> str:
+    if isinstance(candidate.value, float):
+        return _format_number(candidate.value)
+    return re.sub(r"\s+", " ", str(candidate.value).lower()).strip()
+
+
+def _field_values_equivalent(
+    field_key: str,
+    left: RegexCandidate,
+    right: RegexCandidate,
+) -> bool:
+    if field_key.endswith("_m2") or field_key == "taisehitus_pct":
+        left_float = _float_or_none(left.value)
+        right_float = _float_or_none(right.value)
+        if left_float is not None and right_float is not None:
+            return _values_close(left_float, right_float, absolute=0.01)
+    return _candidate_value_key(left) == _candidate_value_key(right)
+
+
+def _score_candidate(candidate: RegexCandidate) -> tuple[float, list[str], list[str]]:
+    text = " ".join(
+        part for part in (candidate.evidence.text, candidate.context or "") if part
+    )
+    low = text.lower()
+    evidence_low = candidate.evidence.text.lower()
+    score = candidate.confidence * 100
+    reasons = list(candidate.reasons)
+    flags: list[str] = []
+
+    for term in STRONG_CONTEXT_TERMS:
+        if term in low:
+            score += 6
+            reasons.append(f"boost:{term}")
+
+    for term in FIELD_STRONG_CONTEXT_TERMS.get(candidate.field_key, ()):
+        if term in low:
+            score += 15
+            reasons.append(f"field_boost:{term}")
+
+    for term in WEAK_CONTEXT_TERMS:
+        if term in evidence_low:
+            if (
+                candidate.field_key == "hoonete_lubatud_korgused_m"
+                and term.startswith("olemasolev")
+                and re.search(r"olemasoleva\w*\s+maapinn", evidence_low)
+            ):
+                continue
+            score -= 12
+            flags.append(f"weak_context:{term}")
+
+    for term in FIELD_WEAK_CONTEXT_TERMS.get(candidate.field_key, ()):
+        if term in evidence_low:
+            score -= 18
+            flags.append(f"field_weak_context:{term}")
+
+    if candidate.field_key == "lubatud_korrused":
+        if "maa-alune" in evidence_low or "maa alune" in evidence_low:
+            flags.append("underground_floor_context")
+            score -= 18
+            score = min(score, 70)
+        if not _has_amount_text(candidate.value):
+            flags.append("missing_floor_amount")
+            score -= 35
+
+    if candidate.field_key == "hoonete_lubatud_korgused_m":
+        if re.search(
+            r"\b(?:piire|piirde|piirdeaia|heki|aia|traatvõrk|võrkai|võrgust)\w*",
+            evidence_low,
+        ):
+            flags.append("not_building_height")
+            score -= 35
+        if not _has_amount_text(candidate.value):
+            flags.append("missing_height_amount")
+            score -= 30
+
+    if "toc_downrank" in candidate.reasons:
+        score -= 25
+        flags.append("toc_context")
+
+    return max(0, min(score, 100)), reasons, flags
+
+
+def _quality_for_score(score: float, flags: list[str]) -> str:
+    blocking_flags = {
+        "missing_floor_amount",
+        "missing_height_amount",
+        "not_building_height",
+        "underground_floor_context",
+        "toc_context",
+    }
+    if score >= 88 and not blocking_flags.intersection(flags):
+        return "strong"
+    if score >= 62:
+        return "candidate"
+    return "weak"
+
+
+def _rank_candidates(candidates: list[RegexCandidate]) -> list[RegexCandidate]:
+    ranked: list[RegexCandidate] = []
+    for candidate in candidates:
+        score, reasons, flags = _score_candidate(candidate)
+        candidate.score = round(score, 2)
+        candidate.quality = _quality_for_score(score, flags)
+        candidate.reasons = sorted(set(reasons))
+        candidate.flags = sorted(set(flags))
+        ranked.append(candidate)
+
+    ranked.sort(
         key=lambda candidate: (
+            -(candidate.score or 0),
             -candidate.confidence,
             candidate.evidence.pdf or "",
             candidate.evidence.page or 0,
-        ),
-    )[0]
+            str(candidate.raw_value),
+        )
+    )
+    for index, candidate in enumerate(ranked, start=1):
+        candidate.rank = index
+    return ranked
+
+
+def _has_close_conflict(
+    spec: FieldSpec,
+    best: RegexCandidate,
+    candidates: list[RegexCandidate],
+) -> bool:
+    best_score = best.score or 0
+    for candidate in candidates[1:]:
+        if (candidate.score or 0) < best_score - 8:
+            continue
+        if not _field_values_equivalent(spec.key, best, candidate):
+            return True
+    return False
+
+
+def _candidate_can_fill_field(
+    spec: FieldSpec,
+    candidate: RegexCandidate,
+    candidates: list[RegexCandidate],
+) -> bool:
+    if candidate.quality != "strong":
+        return False
+    return not _has_close_conflict(spec, candidate, candidates)
 
 
 FIELD_SPECS: tuple[FieldSpec, ...] = (
@@ -291,8 +586,8 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
             ),
             RegexPattern(
                 "hoone_korgus",
-                r"\b(?:hoone\s*)?(?:maksimaalne\s*)?kõrgus\D{0,40}(?P<value>\d+(?:[,.]\d+)?)\s*m\b",
-                0.65,
+                r"\b(?:hoone\s*)?(?:maksimaalne\s*)?kõrgus\D{0,90}(?P<value>\d+(?:[,.]\d+)?)\s*m\b",
+                0.7,
             ),
         ),
     ),
@@ -395,6 +690,8 @@ def extract_field_candidates(
 ) -> list[RegexCandidate]:
     candidates: list[RegexCandidate] = []
     for chunk in chunks:
+        if chunk.field_key is not None and chunk.field_key != spec.key:
+            continue
         for regex in spec.patterns:
             for match in re.finditer(
                 regex.pattern,
@@ -405,24 +702,26 @@ def extract_field_candidates(
                 if candidate is not None:
                     candidates.append(candidate)
 
-    deduped: dict[tuple[int | None, str], RegexCandidate] = {}
-    for candidate in candidates:
+    ranked = _rank_candidates(candidates)
+    deduped: dict[tuple[str | None, int | None, str], RegexCandidate] = {}
+    for candidate in ranked:
         key = (
+            candidate.evidence.pdf,
             candidate.evidence.page,
             candidate.raw_value,
         )
         existing = deduped.get(key)
-        if existing is None or candidate.confidence > existing.confidence:
+        if existing is None or (candidate.score or 0) > (existing.score or 0):
             deduped[key] = candidate
-    return list(deduped.values())
+    return _rank_candidates(list(deduped.values()))
 
 
 def extracted_field_from_candidates(
     spec: FieldSpec,
     candidates: list[RegexCandidate],
 ) -> ExtractedField:
-    best = _best_candidate(candidates)
-    if best is None:
+    ranked = _rank_candidates(candidates)
+    if not ranked:
         review = ReviewItem(
             key=spec.key,
             message=f"PDFi valitud lehtedelt ei leitud välja: {spec.label}.",
@@ -434,6 +733,23 @@ def extracted_field_from_candidates(
             candidates=[],
             needs_review=[review],
         )
+    best = ranked[0]
+    if not _candidate_can_fill_field(spec, best, ranked):
+        review = ReviewItem(
+            key=spec.key,
+            message=(
+                f"Leiti nõrk või vastuoluline regex-kandidaat väljale "
+                f"{spec.label}; vajab LLM-i või käsitsi kontrolli."
+            ),
+            evidence=best.evidence,
+        )
+        return ExtractedField(
+            key=spec.key,
+            label=spec.label,
+            unit=spec.unit,
+            candidates=ranked,
+            needs_review=[review],
+        )
     return ExtractedField(
         key=spec.key,
         label=spec.label,
@@ -442,7 +758,7 @@ def extracted_field_from_candidates(
         confidence=best.confidence,
         source_type="regex",
         evidence=best.evidence,
-        candidates=candidates,
+        candidates=ranked,
     )
 
 
@@ -511,6 +827,8 @@ def _candidate_exists(field: ExtractedField, candidate: RegexCandidate) -> bool:
         existing.source_type == candidate.source_type
         and existing.pattern_name == candidate.pattern_name
         and existing.raw_value == candidate.raw_value
+        and existing.evidence.pdf == candidate.evidence.pdf
+        and existing.evidence.page == candidate.evidence.page
         for existing in field.candidates
     )
 
@@ -561,6 +879,10 @@ def _make_candidate(
         source_type=source_type,
         pattern_name=pattern_name,
         evidence=Evidence(pdf=pdf, page=page, text=evidence_text),
+        score=round(confidence * 100, 2),
+        quality="strong" if confidence >= 0.85 else "candidate",
+        reasons=[f"source:{source_type.value}"],
+        context=evidence_text,
     )
 
 
@@ -691,16 +1013,6 @@ def _enrich_from_cadastre(
             _add_candidate(land_use_field, candidate)
             if not _field_has_value(land_use_field):
                 _use_candidate(land_use_field, candidate)
-            else:
-                pdf_terms = _land_use_terms(land_use_field.value)
-                cadastre_terms = _land_use_terms(candidate.value)
-                if cadastre_terms and not pdf_terms.intersection(cadastre_terms):
-                    _use_candidate(land_use_field, candidate)
-                    _review(
-                        land_use_field,
-                        "PDFi kasutusotstarve ei kattunud katastri sihtotstarbega.",
-                        candidate.evidence,
-                    )
 
     ownership_field = fields.get("omandivorm")
     if ownership_field is not None:
@@ -900,6 +1212,26 @@ def enrich_building_rights(
     return section
 
 
+def _context_backed_field(
+    spec: FieldSpec,
+    parcel_context: dict[str, Any],
+) -> ExtractedField | None:
+    if spec.key not in {"kasutusotstarve", "omandivorm"}:
+        return None
+
+    field = ExtractedField(key=spec.key, label=spec.label, unit=spec.unit)
+    candidate: RegexCandidate | None = None
+    if spec.key == "kasutusotstarve":
+        candidate = _cadastre_land_use_candidate(field, parcel_context)
+    elif spec.key == "omandivorm":
+        candidate = _cadastre_ownership_candidate(field, parcel_context)
+
+    if candidate is None:
+        return None
+    _use_candidate(field, candidate)
+    return field
+
+
 @time_function
 def extract_building_rights(
     chunks: list[TextChunk],
@@ -912,9 +1244,12 @@ def extract_building_rights(
     )
     fields: dict[str, ExtractedField] = {}
     reviews: list[ReviewItem] = []
+    parcel_context = compact_parcel_context(parcel_attributes)
     for spec in field_specs:
-        candidates = extract_field_candidates(chunks, spec)
-        field = extracted_field_from_candidates(spec, candidates)
+        field = _context_backed_field(spec, parcel_context)
+        if field is None:
+            candidates = extract_field_candidates(chunks, spec)
+            field = extracted_field_from_candidates(spec, candidates)
         fields[spec.key] = field
         reviews.extend(field.needs_review)
 
@@ -932,7 +1267,7 @@ def extract_building_rights(
         f"missing={[review.key for review in reviews]}"
     )
     section = BuildingRightSection(fields=fields, needs_review=reviews)
-    return enrich_building_rights(section, parcel_attributes)
+    return enrich_building_rights(section, parcel_context)
 
 
 def run_rule_based_extractors(chunks: list[TextChunk]) -> BuildingRightSection:
