@@ -1,23 +1,39 @@
-"""Rule-based extraction for Estonian detail-planning text."""
+"""Configurable regex extraction for detail-plan building rights."""
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from backend.core.logging import logger
 from backend.core.utils import time_function
 from backend.detailplan_analyzer.extraction import TextChunk
-from backend.detailplan_analyzer.models import Evidence, Fact
+from backend.detailplan_analyzer.models import (
+    BuildingRightSection,
+    Evidence,
+    ExtractedField,
+    RegexCandidate,
+    ReviewItem,
+)
 
-NumberParser = Callable[[str], Any]
+ValueParser = Callable[[str], Any]
 
 
-@dataclass
-class RuleExtraction:
-    building_right: dict[str, Fact] = field(default_factory=dict)
-    section_facts: dict[str, list[Fact]] = field(default_factory=dict)
+@dataclass(frozen=True)
+class RegexPattern:
+    name: str
+    pattern: str
+    confidence: float = 0.8
+
+
+@dataclass(frozen=True)
+class FieldSpec:
+    key: str
+    label: str
+    unit: str | None
+    patterns: tuple[RegexPattern, ...]
+    parser: ValueParser | None = None
 
 
 def parse_float(value: str) -> float:
@@ -31,6 +47,18 @@ def parse_int(value: str) -> int:
     return int(round(parse_float(value)))
 
 
+def parse_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip(" :;-.,")).strip()
+
+
+def parse_code(value: str) -> str:
+    return parse_text(value).upper().replace(" ", "")
+
+
+def parse_roof_pitch(value: str) -> str:
+    return parse_text(value).replace("–", "-").replace(" - ", "-")
+
+
 def _line_for_match(text: str, match: re.Match) -> str:
     start = text.rfind("\n", 0, match.start()) + 1
     end = text.find("\n", match.end())
@@ -39,24 +67,39 @@ def _line_for_match(text: str, match: re.Match) -> str:
     return text[start:end].strip()[:700]
 
 
-def _fact_from_match(
+def _raw_value(match: re.Match) -> str:
+    groupdict = match.groupdict()
+    if "value" in groupdict and groupdict["value"] is not None:
+        return groupdict["value"]
+    return match.group(1)
+
+
+def _candidate_from_match(
     chunk: TextChunk,
+    spec: FieldSpec,
+    regex: RegexPattern,
     match: re.Match,
-    key: str,
-    label: str,
-    unit: str | None,
-    parser: NumberParser | None,
-    confidence: float,
-) -> Fact:
-    raw_value = match.groupdict().get("value") or match.group(1)
-    value = parser(raw_value) if parser else raw_value.strip(" :;-")
-    return Fact(
-        key=key,
-        label=label,
+) -> RegexCandidate | None:
+    raw = _raw_value(match)
+    try:
+        value = spec.parser(raw) if spec.parser else parse_text(raw)
+    except (TypeError, ValueError):
+        logger.debug(
+            "Skipping regex candidate field=%s pattern=%s raw=%s",
+            spec.key,
+            regex.name,
+            raw,
+        )
+        return None
+
+    return RegexCandidate(
+        field_key=spec.key,
+        label=spec.label,
         value=value,
-        unit=unit,
-        confidence=confidence,
-        source_type="regex",
+        raw_value=parse_text(raw),
+        unit=spec.unit,
+        confidence=regex.confidence,
+        pattern_name=regex.name,
         evidence=Evidence(
             pdf=chunk.pdf_path.name,
             page=chunk.page,
@@ -65,201 +108,322 @@ def _fact_from_match(
     )
 
 
-def _first_match_fact(
+def _best_candidate(candidates: list[RegexCandidate]) -> RegexCandidate | None:
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            -candidate.confidence,
+            candidate.evidence.pdf or "",
+            candidate.evidence.page or 0,
+        ),
+    )[0]
+
+
+FIELD_SPECS: tuple[FieldSpec, ...] = (
+    FieldSpec(
+        key="krundi_pind_m2",
+        label="Krundi pind/suurus",
+        unit="m2",
+        parser=parse_float,
+        patterns=(
+            RegexPattern(
+                "krundi_pind",
+                r"\bkrundi\s+(?:pind|pindala|suurus)\D{0,40}(?P<value>\d[\d\s.,]*)\s*m(?:2|²)\b",
+                0.95,
+            ),
+            RegexPattern(
+                "maaüksuse_pindala",
+                r"\bmaa(?:üksuse|tüki)?\s+pindala\D{0,40}(?P<value>\d[\d\s.,]*)\s*m(?:2|²)\b",
+                0.85,
+            ),
+            RegexPattern(
+                "pindala_near_krunt",
+                r"\bpindala\D{0,30}(?P<value>\d[\d\s.,]*)\s*m(?:2|²).{0,60}\bkrunt",
+                0.65,
+            ),
+        ),
+    ),
+    FieldSpec(
+        key="taisehitus_pct",
+        label="Täisehitus",
+        unit="%",
+        parser=parse_float,
+        patterns=(
+            RegexPattern(
+                "taisehitus_protsent",
+                r"\btäisehitus(?:e\s*protsent|protsent)?\D{0,40}(?P<value>\d+(?:[,.]\d+)?)\s*%",
+                0.95,
+            ),
+            RegexPattern(
+                "percent_near_taisehitus",
+                r"(?P<value>\d+(?:[,.]\d+)?)\s*%\D{0,40}\btäisehitus",
+                0.75,
+            ),
+        ),
+    ),
+    FieldSpec(
+        key="brutopind_m2",
+        label="Brutopind",
+        unit="m2",
+        parser=parse_float,
+        patterns=(
+            RegexPattern(
+                "brutopind",
+                r"\b(?:suletud\s+)?bruto\s*pind\D{0,40}(?P<value>\d[\d\s.,]*)\s*m(?:2|²)\b",
+                0.9,
+            ),
+            RegexPattern(
+                "brutopind_compact",
+                r"\bbrutopind\D{0,40}(?P<value>\d[\d\s.,]*)\s*m(?:2|²)\b",
+                0.9,
+            ),
+        ),
+    ),
+    FieldSpec(
+        key="ehitusalune_pind_m2",
+        label="Ehitusalune pind",
+        unit="m2",
+        parser=parse_float,
+        patterns=(
+            RegexPattern(
+                "ehitusalune_pind",
+                r"\b(?:ehitisealune|ehitusalune)\s+pind(?:\s+max)?\D{0,40}(?P<value>\d[\d\s.,]*)\s*m(?:2|²)\b",
+                0.95,
+            ),
+            RegexPattern(
+                "hoonete_alune_pind",
+                r"\bhoonete\s+alune\s+pind\D{0,40}(?P<value>\d[\d\s.,]*)\s*m(?:2|²)\b",
+                0.75,
+            ),
+        ),
+    ),
+    FieldSpec(
+        key="lubatud_korrused",
+        label="Lubatud korrused",
+        unit=None,
+        parser=parse_text,
+        patterns=(
+            RegexPattern(
+                "korruselisus",
+                r"\bkorruselisus\s*[:：-]?\s*(?P<value>[^\n.;]{1,140})",
+                0.95,
+            ),
+            RegexPattern(
+                "korruste_arv",
+                r"\bkorruste\s+arv\s*[:：-]?\s*(?P<value>[^\n.;]{1,100})",
+                0.85,
+            ),
+            RegexPattern(
+                "korruseline",
+                r"\b(?P<value>\d+\s*(?:[-–]\s*\d+)?\s*(?:maapealset\s*)?korrus(?:t|eline|elise)?)\b",
+                0.55,
+            ),
+        ),
+    ),
+    FieldSpec(
+        key="lubatud_majade_ehitamise_arv",
+        label="Lubatud majade ehitamise arv",
+        unit=None,
+        parser=parse_int,
+        patterns=(
+            RegexPattern(
+                "lubatud_hoonete_arv",
+                r"\blubatud(?:\s+eraldiseisvate)?\s+(?:hoonete|majade)\s+arv\D{0,30}(?P<value>\d+)",
+                0.95,
+            ),
+            RegexPattern(
+                "lubatud_ehitada_hoonet",
+                r"\blubatud.{0,50}\behitada\D{0,40}(?P<value>\d+)\s+(?:hoonet|maja)",
+                0.75,
+            ),
+        ),
+    ),
+    FieldSpec(
+        key="hoonete_lubatud_korgused_m",
+        label="Hoonete lubatud kõrgused",
+        unit="m",
+        parser=parse_text,
+        patterns=(
+            RegexPattern(
+                "hoonestuse_korgus",
+                r"\b(?:maksimaalne\s*)?hoonestuse\s+kõrgus\s*[:：-]?\s*(?P<value>[^\n.;]{1,140})",
+                0.95,
+            ),
+            RegexPattern(
+                "hoone_korgus",
+                r"\b(?:hoone\s*)?(?:maksimaalne\s*)?kõrgus\D{0,40}(?P<value>\d+(?:[,.]\d+)?)\s*m\b",
+                0.65,
+            ),
+        ),
+    ),
+    FieldSpec(
+        key="hoonete_arv",
+        label="Hoonete arv",
+        unit=None,
+        parser=parse_int,
+        patterns=(
+            RegexPattern(
+                "hoonete_arv",
+                r"\bhoonete\s+arv\D{0,30}(?P<value>\d+)",
+                0.9,
+            ),
+            RegexPattern(
+                "planeeritud_hoonet",
+                r"\bplaneeritud\s+(?P<value>\d+)\s+hoonet",
+                0.7,
+            ),
+        ),
+    ),
+    FieldSpec(
+        key="kasutusotstarve",
+        label="Kasutusotstarve/sihtotstarve",
+        unit=None,
+        parser=parse_text,
+        patterns=(
+            RegexPattern(
+                "sihtotstarve",
+                r"\b(?:maakasutuse\s+)?sihtotstarve\s*[:：-]?\s*(?P<value>[^\n.;]{3,140})",
+                0.95,
+            ),
+            RegexPattern(
+                "kasutusotstarve",
+                r"\bkasutusotstarve\s*[:：-]?\s*(?P<value>[^\n.;]{3,140})",
+                0.9,
+            ),
+        ),
+    ),
+    FieldSpec(
+        key="katusekalle",
+        label="Katusekalle",
+        unit="degrees",
+        parser=parse_roof_pitch,
+        patterns=(
+            RegexPattern(
+                "katuse_kalle",
+                r"\bkatuse\s*kalle\D{0,30}(?P<value>\d+\s*(?:[-–]\s*\d+)?(?:\s*°)?)",
+                0.95,
+            ),
+            RegexPattern(
+                "katusekalle",
+                r"\bkatusekalle\D{0,30}(?P<value>\d+\s*(?:[-–]\s*\d+)?(?:\s*°)?)",
+                0.95,
+            ),
+        ),
+    ),
+    FieldSpec(
+        key="tulepusivusklass",
+        label="Tulepüsivusklass",
+        unit=None,
+        parser=parse_code,
+        patterns=(
+            RegexPattern(
+                "tulepusivus_tp",
+                r"\btulepüsivus(?:aste|klass)?\s*[:：-]?\s*(?P<value>TP\s*[-–]?\s*\d+)",
+                0.95,
+            ),
+            RegexPattern(
+                "tp_code",
+                r"\b(?P<value>TP\s*[-–]?\s*\d+)\b",
+                0.65,
+            ),
+        ),
+    ),
+)
+
+
+def extract_field_candidates(
     chunks: list[TextChunk],
-    key: str,
-    label: str,
-    patterns: list[str],
-    unit: str | None = None,
-    parser: NumberParser | None = parse_float,
-    confidence: float = 0.8,
-) -> Fact | None:
+    spec: FieldSpec,
+) -> list[RegexCandidate]:
+    candidates: list[RegexCandidate] = []
     for chunk in chunks:
-        for pattern in patterns:
-            match = re.search(pattern, chunk.text, flags=re.IGNORECASE | re.MULTILINE)
-            if match:
-                return _fact_from_match(
-                    chunk=chunk,
-                    match=match,
-                    key=key,
-                    label=label,
-                    unit=unit,
-                    parser=parser,
-                    confidence=confidence,
-                )
-    return None
+        for regex in spec.patterns:
+            for match in re.finditer(
+                regex.pattern,
+                chunk.text,
+                flags=re.IGNORECASE | re.MULTILINE,
+            ):
+                candidate = _candidate_from_match(chunk, spec, regex, match)
+                if candidate is not None:
+                    candidates.append(candidate)
+
+    deduped: dict[tuple[int | None, str], RegexCandidate] = {}
+    for candidate in candidates:
+        key = (
+            candidate.evidence.page,
+            candidate.raw_value,
+        )
+        existing = deduped.get(key)
+        if existing is None or candidate.confidence > existing.confidence:
+            deduped[key] = candidate
+    return list(deduped.values())
 
 
-def _line_facts(
-    chunks: list[TextChunk],
-    section_key: str,
-    label: str,
-    keywords: list[str],
-    limit: int = 4,
-) -> list[Fact]:
-    facts: list[Fact] = []
-    seen: set[str] = set()
-    lowered_keywords = [keyword.lower() for keyword in keywords]
-    for chunk in chunks:
-        for line in chunk.text.splitlines():
-            normalized = line.strip()
-            low = normalized.lower()
-            if not normalized or normalized in seen:
-                continue
-            if any(keyword in low for keyword in lowered_keywords):
-                seen.add(normalized)
-                facts.append(
-                    Fact(
-                        key=f"{section_key}_line",
-                        label=label,
-                        value=normalized,
-                        confidence=0.55,
-                        source_type="regex",
-                        evidence=Evidence(
-                            pdf=chunk.pdf_path.name,
-                            page=chunk.page,
-                            text=normalized[:700],
-                        ),
-                    )
-                )
-                if len(facts) >= limit:
-                    return facts
-    return facts
-
-
-BUILDING_RIGHT_PATTERNS = {
-    "krundi_suurus": {
-        "label": "Krundi suurus",
-        "unit": "m2",
-        "parser": parse_float,
-        "patterns": [
-            r"krundi(?:\s+pos\s*\d+)?\s+(?:suurus|pindala)\D{0,40}(?P<value>\d[\d\s.,]*)\s*m(?:2|²)",
-            r"(?:suurus|pindala)\D{0,30}(?P<value>\d[\d\s.,]*)\s*m(?:2|²).{0,60}krunt",
-            r"(?P<value>\d[\d\s.,]*)\s*m(?:2|²).{0,60}krundi\s+(?:suurus|pindala)",
-        ],
-    },
-    "kasutusotstarve": {
-        "label": "Kasutusotstarve",
-        "unit": None,
-        "parser": None,
-        "patterns": [
-            r"(?:sihtotstarve|kasutusotstarve)\D{0,40}(?P<value>[^\n.;]{3,120})",
-            r"(?P<value>(?:elamu|äri|tootmis|ühiskondlike ehitiste|transpordi)[^\n.;]{0,80}maa)",
-        ],
-    },
-    "korruselisus": {
-        "label": "Korruselisus",
-        "unit": None,
-        "parser": None,
-        "patterns": [
-            r"(?P<value>\d+\s*(?:[-–]\s*\d+)?\s*(?:maapealset\s*)?korrus(?:t|eline|eline hooneosa)?)",
-            r"korruselisus\D{0,30}(?P<value>\d+\s*(?:[-–]\s*\d+)?)",
-        ],
-    },
-    "taisehitus": {
-        "label": "Täisehitus",
-        "unit": "%",
-        "parser": parse_float,
-        "patterns": [
-            r"täisehitus(?:e\s*protsent|protsent)?\D{0,40}(?P<value>\d+(?:[,.]\d+)?)\s*%",
-            r"(?P<value>\d+(?:[,.]\d+)?)\s*%\D{0,40}täisehitus",
-        ],
-    },
-    "korgus": {
-        "label": "Kõrgus",
-        "unit": "m",
-        "parser": parse_float,
-        "patterns": [
-            r"(?:hoone\s*)?(?:maksimaalne\s*)?kõrgus\D{0,40}(?P<value>\d+(?:[,.]\d+)?)\s*m",
-            r"(?P<value>\d+(?:[,.]\d+)?)\s*m\D{0,50}(?:kõrgune|kõrgus)",
-        ],
-    },
-    "hoonete_arv": {
-        "label": "Hoonete arv",
-        "unit": None,
-        "parser": parse_int,
-        "patterns": [
-            r"hoonete\s+arv\D{0,30}(?P<value>\d+)",
-            r"planeeritud\s+(?P<value>\d+)\s+hoonet",
-        ],
-    },
-}
-
-
-SECTION_KEYWORDS = {
-    "arhitektuursed_tingimused": (
-        "Arhitektuursed tingimused",
-        ["arhitektuur", "fassaad", "katuse", "viimistlus", "materjal"],
-    ),
-    "haljastus_ja_keskkond": (
-        "Haljastus ja keskkond",
-        ["haljastus", "keskkond", "puu", "rohe", "müratase", "radoon"],
-    ),
-    "juurdepaas_ja_parkimine": (
-        "Juurdepääs ja parkimine",
-        ["juurdepääs", "ligipääs", "parkim", "liiklus"],
-    ),
-    "tehnovorgud": (
-        "Tehnovõrgud",
-        [
-            "tehnovõrk",
-            "veevarustus",
-            "kanalisatsioon",
-            "elektr",
-            "side",
-            "gaas",
-            "küte",
-        ],
-    ),
-    "servituudid_ja_kitsendused": (
-        "Servituudid ja kitsendused",
-        ["servituut", "kitsendus", "kaitsevöönd"],
-    ),
-}
+def extracted_field_from_candidates(
+    spec: FieldSpec,
+    candidates: list[RegexCandidate],
+) -> ExtractedField:
+    best = _best_candidate(candidates)
+    if best is None:
+        review = ReviewItem(
+            key=spec.key,
+            message=f"PDFi valitud lehtedelt ei leitud välja: {spec.label}.",
+        )
+        return ExtractedField(
+            key=spec.key,
+            label=spec.label,
+            unit=spec.unit,
+            candidates=[],
+            needs_review=[review],
+        )
+    return ExtractedField(
+        key=spec.key,
+        label=spec.label,
+        value=best.value,
+        unit=spec.unit,
+        confidence=best.confidence,
+        source_type="regex",
+        evidence=best.evidence,
+        candidates=candidates,
+    )
 
 
 @time_function
-def run_rule_based_extractors(chunks: list[TextChunk]) -> RuleExtraction:
+def extract_building_rights(
+    chunks: list[TextChunk],
+    field_specs: tuple[FieldSpec, ...] = FIELD_SPECS,
+) -> BuildingRightSection:
     logger.debug(
-        "Running rule-based extractors chunks=%s pages=%s",
+        "Running regex building-right extraction chunks=%s pages=%s",
         len(chunks),
         [(chunk.pdf_path.name, chunk.page) for chunk in chunks],
     )
-    extraction = RuleExtraction()
-    for key, spec in BUILDING_RIGHT_PATTERNS.items():
-        fact = _first_match_fact(
-            chunks=chunks,
-            key=key,
-            label=spec["label"],
-            patterns=spec["patterns"],
-            unit=spec["unit"],
-            parser=spec["parser"],
-        )
-        if fact:
-            extraction.building_right[key] = fact
-
-    for section_key, (label, keywords) in SECTION_KEYWORDS.items():
-        extraction.section_facts[section_key] = _line_facts(
-            chunks=chunks,
-            section_key=section_key,
-            label=label,
-            keywords=keywords,
-        )
+    fields: dict[str, ExtractedField] = {}
+    reviews: list[ReviewItem] = []
+    for spec in field_specs:
+        candidates = extract_field_candidates(chunks, spec)
+        field = extracted_field_from_candidates(spec, candidates)
+        fields[spec.key] = field
+        reviews.extend(field.needs_review)
 
     logger.debug(
-        "Rule-based building_right=%s section_fact_counts=%s",
+        "Regex building-right extracted=%s missing=%s",
         {
             key: {
-                "value": fact.value,
-                "unit": fact.unit,
-                "page": fact.evidence.page if fact.evidence else None,
-                "evidence": fact.evidence.text[:220] if fact.evidence else None,
+                "value": field.value,
+                "unit": field.unit,
+                "candidates": len(field.candidates),
+                "page": field.evidence.page if field.evidence else None,
             }
-            for key, fact in extraction.building_right.items()
+            for key, field in fields.items()
         },
-        {
-            section_key: len(facts)
-            for section_key, facts in extraction.section_facts.items()
-        },
+        [review.key for review in reviews],
     )
-    return extraction
+    return BuildingRightSection(fields=fields, needs_review=reviews)
+
+
+def run_rule_based_extractors(chunks: list[TextChunk]) -> BuildingRightSection:
+    """Backward-compatible wrapper for old imports."""
+    return extract_building_rights(chunks)

@@ -40,14 +40,15 @@ Open up the frontend URL and youre good to go
 
 ### Local dependency installer
 
-For local PDF/OCR/LLM development on Ubuntu/Debian, install the required system
-and Python dependencies with:
+For local PDF/OCR development on Ubuntu/Debian, install the required system and
+Python dependencies with:
 
 ```bash
 scripts/install_local_deps.sh
 ```
 
-To also install Ollama and pull the default model:
+Ollama install options are still present in the helper script from the previous
+LLM workflow, but the current regex-only analyzer does not use Ollama.
 
 ```bash
 scripts/install_local_deps.sh --with-ollama
@@ -61,7 +62,8 @@ scripts/install_local_deps.sh --with-ollama --model=qwen3:14b
 
 ## Docker
 
-The Docker stack runs the backend, frontend, OCR dependencies, and Ollama:
+The Docker stack runs the backend, frontend, OCR dependencies, and currently
+still includes the older Ollama service pending dependency cleanup:
 
 ```bash
 DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose up --build
@@ -79,24 +81,13 @@ Services:
 * Ollama: http://127.0.0.1:11434
 
 The backend container mounts local `./data` to `/app/data`, so large GeoPackage
-and downloaded PDF files stay outside the image. The first startup also pulls
-the default model into a Docker volume:
-
-```bash
-OLLAMA_MODEL=qwen3:8b DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose up --build
-```
-
-To try a larger model:
-
-```bash
-OLLAMA_MODEL=qwen3:14b DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose up --build
-```
+and downloaded PDF files stay outside the image.
 
 Run the standalone PDF analyzer inside Docker:
 
 ```bash
 docker compose run --rm backend \
-  python experiments/run_detailplan_pdf_analysis.py \
+  python scripts/run_detailplan_regex_analysis.py \
   /app/data/detail_downloads/30108673_Kaupmehe/SK100_30108673_KaupmeheTn19.pdf \
   --address "Kaupmehe tn 19"
 ```
@@ -104,45 +95,27 @@ docker compose run --rm backend \
 ### Detail-plan PDF analysis runtime
 
 The backend endpoint `GET /api/detail-plan-analysis` analyzes the highest-overlap
-detail-planning PDF for a parcel. Python dependencies are managed by Poetry, but
-the OCR and local LLM runtime also need system services:
+detail-planning PDF for a parcel. It downloads/caches the PDF, OCRs only when
+needed, extracts page text with PyMuPDF, selects building-right pages, and returns
+a synchronous regex-only `ehitamise_pohioigus` result.
+
+Manual local PDF run:
+
+```bash
+poetry run python scripts/run_detailplan_regex_analysis.py \
+  data/detail_downloads/30109024/SK100_30109024_MaiTn2RaudteeTn_ocr.pdf \
+  --address "Mai tn 2"
+```
+
+Python dependencies are managed by Poetry, but OCR also needs system services:
 
 * OCR: install OCRmyPDF dependencies, including `tesseract`, `qpdf`, and
   Ghostscript (`gs`).
 * Tesseract languages: install both `est` and `eng` language packs.
-* LLM: run Ollama locally and pull the first-pass model:
-  `ollama pull qwen3:8b`.
-
-Optional environment variables:
-
-* `OLLAMA_BASE_URL`, default `http://127.0.0.1:11434`
-* `OLLAMA_MODEL`, default `qwen3:8b`
-* `OLLAMA_TIMEOUT_S`, default `600`
 
 Detail plans with less than `DETAIL_PLAN_MIN_COVERAGE_PCT` parcel overlap are
 filtered out before they are returned to the frontend. The current cutoff is
 `10.0%` in `backend/geo/constants.py`.
-
-Debug local LLM availability:
-
-```bash
-curl http://127.0.0.1:11434/api/tags
-ollama list
-ollama pull qwen3:8b
-```
-
-If the analyzer returns `llm_unavailable` with `Ollama generation timed out`,
-Ollama is reachable but `/api/chat` did not finish in time. Try:
-
-```bash
-OLLAMA_TIMEOUT_S=1200 uvicorn backend.main:app --reload
-```
-
-Or for Docker:
-
-```bash
-OLLAMA_TIMEOUT_S=1200 DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose up --build
-```
 
 When using Docker, follow analyzer progress in backend logs:
 
@@ -151,5 +124,5 @@ docker compose logs -f backend
 ```
 
 The analyzer logs cache/download, OCR decisions, extracted page counts, selected
-chunk pages/scores/snippets, regex facts, Ollama URL/model/prompt size, and each
-timed pipeline function.
+chunk pages/scores/snippets, regex candidates, missing fields, and each timed
+pipeline function.

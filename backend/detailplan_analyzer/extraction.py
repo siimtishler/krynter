@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import contextlib
-import io
-import os
+import hashlib
+import json
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import fitz
 
+from backend.core.config import config
 from backend.core.logging import logger
 from backend.core.utils import time_function
 from backend.detailplan_analyzer.models import Evidence
@@ -19,6 +19,7 @@ from backend.detailplan_analyzer.pdfs import OCRRuntime, run_ocr
 TOPIC_KEYWORDS = {
     "krunt": 2,
     "krundi suurus": 6,
+    "krundi pind": 6,
     "pindala": 4,
     "sihtotstarve": 5,
     "kasutusotstarve": 5,
@@ -26,20 +27,14 @@ TOPIC_KEYWORDS = {
     "täisehitus": 7,
     "ehitisealune": 6,
     "ehitusalune": 6,
+    "brutopind": 5,
+    "bruto pind": 5,
     "kõrgus": 4,
     "hoonete arv": 6,
-    "arhitektuur": 4,
-    "haljastus": 4,
-    "keskkond": 2,
-    "juurdepääs": 4,
-    "parkim": 4,
-    "tehnovõrk": 5,
-    "veevarustus": 3,
-    "kanalisatsioon": 3,
-    "elekter": 3,
-    "servituut": 5,
-    "kitsendus": 5,
-    "kaitsevöönd": 4,
+    "katuse": 4,
+    "katusekalle": 5,
+    "tulepüsivus": 5,
+    "tp-": 4,
 }
 
 
@@ -68,6 +63,44 @@ def normalize_planning_text(text: str) -> str:
         if normalized_line:
             lines.append(normalized_line)
     return "\n".join(lines)
+
+
+def _pdf_fingerprint(pdf_path: Path) -> str:
+    stat = pdf_path.stat()
+    payload = "|".join(
+        [
+            str(pdf_path.resolve()),
+            str(stat.st_mtime_ns),
+            str(stat.st_size),
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _page_cache_path(pdf_path: Path) -> Path:
+    return (
+        config.detail_plan_analysis_cache_dir
+        / "pages"
+        / f"{_pdf_fingerprint(pdf_path)}.json"
+    )
+
+
+def _serialize_page(page: PageText) -> dict:
+    return {
+        "pdf_path": str(page.pdf_path),
+        "page": page.page,
+        "text": page.text,
+        "normalized_text": page.normalized_text,
+    }
+
+
+def _deserialize_page(payload: dict) -> PageText:
+    return PageText(
+        pdf_path=Path(payload["pdf_path"]),
+        page=payload["page"],
+        text=payload["text"],
+        normalized_text=payload["normalized_text"],
+    )
 
 
 @time_function
@@ -136,6 +169,40 @@ def extract_pages(pdf_path: Path) -> list[PageText]:
         non_empty,
         total_chars,
     )
+    return pages
+
+
+@time_function
+def extract_pages_cached(pdf_path: Path, force_refresh: bool = False) -> list[PageText]:
+    cache_path = _page_cache_path(pdf_path)
+    if not force_refresh and cache_path.exists():
+        try:
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+            pages = [_deserialize_page(item) for item in payload["pages"]]
+            logger.debug(
+                "Using cached page text pdf=%s cache=%s page_count=%s",
+                pdf_path,
+                cache_path,
+                len(pages),
+            )
+            return pages
+        except (KeyError, TypeError, json.JSONDecodeError):
+            logger.exception("Failed reading page text cache cache=%s", cache_path)
+
+    pages = extract_pages(pdf_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(
+        json.dumps(
+            {
+                "pdf_path": str(pdf_path),
+                "fingerprint": _pdf_fingerprint(pdf_path),
+                "pages": [_serialize_page(page) for page in pages],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    logger.debug("Cached page text pdf=%s cache=%s", pdf_path, cache_path)
     return pages
 
 
@@ -241,57 +308,6 @@ def select_relevant_chunks(
         ],
     )
     return chunks
-
-
-def markdown_for_page(pdf_path: Path, page: int) -> str:
-    try:
-        import pymupdf4llm
-
-        with _suppress_parser_output():
-            markdown = pymupdf4llm.to_markdown(str(pdf_path), pages=[page - 1])
-        if isinstance(markdown, str) and markdown.strip():
-            return normalize_planning_text(markdown)
-    except Exception:
-        pass
-    return ""
-
-
-@contextlib.contextmanager
-def _suppress_parser_output():
-    stdout_buffer = io.StringIO()
-    stderr_buffer = io.StringIO()
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    stdout_fd = os.dup(1)
-    stderr_fd = os.dup(2)
-    try:
-        os.dup2(devnull, 1)
-        os.dup2(devnull, 2)
-        with (
-            contextlib.redirect_stdout(stdout_buffer),
-            contextlib.redirect_stderr(stderr_buffer),
-        ):
-            yield
-    finally:
-        os.dup2(stdout_fd, 1)
-        os.dup2(stderr_fd, 2)
-        os.close(stdout_fd)
-        os.close(stderr_fd)
-        os.close(devnull)
-
-
-@time_function
-def chunks_with_llm_text(chunks: list[TextChunk]) -> list[TextChunk]:
-    llm_chunks: list[TextChunk] = []
-    for chunk in chunks:
-        markdown = markdown_for_page(chunk.pdf_path, chunk.page)
-        llm_chunks.append(replace(chunk, text=(markdown or chunk.text)[:10000]))
-    logger.debug(
-        "Prepared LLM chunks count=%s total_chars=%s pages=%s",
-        len(llm_chunks),
-        sum(len(chunk.text) for chunk in llm_chunks),
-        [(chunk.pdf_path.name, chunk.page) for chunk in llm_chunks],
-    )
-    return llm_chunks
 
 
 def find_address_lines(pages: list[PageText], address: str) -> list[Evidence]:
