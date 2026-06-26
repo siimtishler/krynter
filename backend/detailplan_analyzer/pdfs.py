@@ -69,7 +69,7 @@ def _content_extension(content_type: str, url: str, body: bytes) -> str:
 
 @time_function
 def download_file(url: str, target_base: Path, timeout_s: int = 60) -> Path:
-    logger.debug("Downloading detail-plan file url=%s target_base=%s", url, target_base)
+    logger.debug(f"Downloading detail-plan file url={url} target_base={target_base}")
     response = httpx.get(url, timeout=timeout_s)
     if response.status_code != 200:
         raise PDFDownloadError(f"Failed to download {url}: HTTP {response.status_code}")
@@ -82,10 +82,9 @@ def download_file(url: str, target_base: Path, timeout_s: int = 60) -> Path:
     target_path = target_base.with_suffix(suffix)
     target_path.write_bytes(response.content)
     logger.debug(
-        "Downloaded detail-plan file path=%s content_type=%s bytes=%s",
-        target_path,
-        response.headers.get("content-type", ""),
-        len(response.content),
+        f"Downloaded detail-plan file path={target_path} "
+        f"content_type={response.headers.get('content-type', '')} "
+        f"bytes={len(response.content)}"
     )
     return target_path
 
@@ -108,12 +107,9 @@ def extract_relevant_pdfs(zip_path: Path, output_dir: Path) -> list[Path]:
         ]
         members_to_extract = sk_pdf_members or pdf_members
         logger.debug(
-            "ZIP members=%s pdf_members=%s sk_pdf_members=%s extracting=%s zip=%s",
-            len(members),
-            len(pdf_members),
-            len(sk_pdf_members),
-            len(members_to_extract),
-            zip_path,
+            f"ZIP members={len(members)} pdf_members={len(pdf_members)} "
+            f"sk_pdf_members={len(sk_pdf_members)} "
+            f"extracting={len(members_to_extract)} zip={zip_path}"
         )
 
         for member in members_to_extract:
@@ -130,7 +126,7 @@ def extract_relevant_pdfs(zip_path: Path, output_dir: Path) -> list[Path]:
                 target.write(source.read())
             extracted.append(target_path)
 
-    logger.debug("Extracted PDF paths: %s", [str(path) for path in extracted])
+    logger.debug(f"Extracted PDF paths: {[str(path) for path in extracted]}")
     return sorted(extracted)
 
 
@@ -154,24 +150,24 @@ def download_plan_pdfs(
     force_refresh: bool = False,
 ) -> list[Path]:
     plan_dir = detail_plan_cache_dir(detail_plan, cache_root)
-    logger.debug(
-        "Preparing plan PDFs plan_id=%s failid=%s cache_dir=%s force_refresh=%s",
+    plan_id = (
         detail_plan.get("sysid")
         or detail_plan.get("planid")
-        or detail_plan.get("kovid"),
-        detail_plan.get("failid"),
-        plan_dir,
-        force_refresh,
+        or detail_plan.get("kovid")
+    )
+    logger.debug(
+        f"Preparing plan PDFs plan_id={plan_id} failid={detail_plan.get('failid')} "
+        f"cache_dir={plan_dir} force_refresh={force_refresh}"
     )
     if not force_refresh:
         cached = cached_plan_pdfs(plan_dir)
         if cached:
-            logger.debug("Using cached plan PDFs: %s", [str(path) for path in cached])
+            logger.debug(f"Using cached plan PDFs: {[str(path) for path in cached]}")
             return cached
 
     file_url = detail_plan.get("failid")
     if not file_url:
-        logger.debug("Detail plan has no failid URL: %s", detail_plan)
+        logger.debug(f"Detail plan has no failid URL: {detail_plan}")
         return []
 
     plan_dir.mkdir(parents=True, exist_ok=True)
@@ -181,7 +177,7 @@ def download_plan_pdfs(
         target_path = plan_dir / "download.pdf"
         if downloaded_path != target_path:
             downloaded_path.replace(target_path)
-        logger.debug("Downloaded direct PDF: %s", target_path)
+        logger.debug(f"Downloaded direct PDF: {target_path}")
         return [target_path]
 
     if downloaded_path.suffix.lower() == ".zip":
@@ -222,10 +218,8 @@ def check_ocr_runtime() -> OCRRuntime:
             missing.append(f"tesseract language '{language}'")
     runtime = OCRRuntime(missing=missing, languages=languages)
     logger.debug(
-        "OCR runtime ready=%s missing=%s languages=%s",
-        runtime.ready,
-        runtime.missing,
-        sorted(runtime.languages),
+        f"OCR runtime ready={runtime.ready} missing={runtime.missing} "
+        f"languages={sorted(runtime.languages)}"
     )
     return runtime
 
@@ -237,7 +231,7 @@ def run_ocr(raw_pdf: Path, ocr_pdf: Path, runtime: OCRRuntime | None = None) -> 
         raise OCRSetupError(runtime.missing)
 
     ocr_pdf.parent.mkdir(parents=True, exist_ok=True)
-    logger.info("Running OCRmyPDF raw_pdf=%s ocr_pdf=%s", raw_pdf, ocr_pdf)
+    logger.info(f"Running OCRmyPDF raw_pdf={raw_pdf} ocr_pdf={ocr_pdf}")
     result = subprocess.run(
         [
             "ocrmypdf",
@@ -253,7 +247,7 @@ def run_ocr(raw_pdf: Path, ocr_pdf: Path, runtime: OCRRuntime | None = None) -> 
         text=True,
     )
     if result.returncode != 0:
-        logger.error("OCRmyPDF failed stderr=%s", result.stderr.strip()[:2000])
+        logger.error(f"OCRmyPDF failed stderr={result.stderr.strip()[:2000]}")
         raise PDFDownloadError(result.stderr.strip() or "OCRmyPDF failed")
-    logger.debug("OCRmyPDF completed stdout=%s", result.stdout.strip()[:1000])
+    logger.debug(f"OCRmyPDF completed stdout={result.stdout.strip()[:1000]}")
     return ocr_pdf

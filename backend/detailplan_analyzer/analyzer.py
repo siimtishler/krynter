@@ -74,15 +74,15 @@ def analyze_pdfs(
     force_refresh: bool = False,
 ) -> DetailPlanAnalysisResponse:
     detail_plan = detail_plan or {}
-    logger.info(
-        "Starting regex PDF analysis address=%s pdf_count=%s pdfs=%s detail_plan_id=%s force_refresh=%s",
-        address,
-        len(pdf_paths),
-        [str(path) for path in pdf_paths],
+    detail_plan_id = (
         detail_plan.get("sysid")
         or detail_plan.get("planid")
-        or detail_plan.get("kovid"),
-        force_refresh,
+        or detail_plan.get("kovid")
+    )
+    logger.info(
+        f"Starting regex PDF analysis address={address} "
+        f"pdf_count={len(pdf_paths)} pdfs={[str(path) for path in pdf_paths]} "
+        f"detail_plan_id={detail_plan_id} force_refresh={force_refresh}"
     )
     meta = DetailPlanMeta(
         address=address,
@@ -92,7 +92,7 @@ def analyze_pdfs(
     )
 
     if not pdf_paths:
-        logger.warning("No PDF paths supplied for analysis address=%s", address)
+        logger.warning(f"No PDF paths supplied for analysis address={address}")
         return DetailPlanAnalysisResponse(
             status=AnalysisStatus.NOT_FOUND,
             meta=meta,
@@ -105,7 +105,7 @@ def analyze_pdfs(
     setup_issues: list[str] = []
     try:
         for raw_pdf in pdf_paths:
-            logger.info("Preparing PDF for text extraction pdf=%s", raw_pdf)
+            logger.info(f"Preparing PDF for text extraction pdf={raw_pdf}")
             working_pdf, ocr_used = prepare_pdf_for_text(
                 raw_pdf,
                 runtime=runtime,
@@ -114,17 +114,15 @@ def analyze_pdfs(
             meta.ocr_used = meta.ocr_used or ocr_used
             extracted = extract_pages_cached(working_pdf, force_refresh=force_refresh)
             logger.debug(
-                "PDF extraction complete raw_pdf=%s working_pdf=%s ocr_used=%s pages=%s chars=%s",
-                raw_pdf,
-                working_pdf,
-                ocr_used,
-                len(extracted),
-                sum(len(page.normalized_text) for page in extracted),
+                f"PDF extraction complete raw_pdf={raw_pdf} "
+                f"working_pdf={working_pdf} ocr_used={ocr_used} "
+                f"pages={len(extracted)} "
+                f"chars={sum(len(page.normalized_text) for page in extracted)}"
             )
             pages.extend(extracted)
     except OCRSetupError as exc:
         setup_issues.extend([f"OCR setup missing: {item}" for item in exc.missing])
-        logger.warning("OCR setup missing for analysis missing=%s", exc.missing)
+        logger.warning(f"OCR setup missing for analysis missing={exc.missing}")
         return DetailPlanAnalysisResponse(
             status=AnalysisStatus.NEEDS_SETUP,
             meta=meta,
@@ -135,10 +133,8 @@ def analyze_pdfs(
     chunks = select_relevant_chunks(pages, address)
     meta.chunks_sent = len(chunks)
     logger.info(
-        "Chunk selection complete address=%s page_count=%s chunk_count=%s",
-        address,
-        len(pages),
-        len(chunks),
+        f"Chunk selection complete address={address} "
+        f"page_count={len(pages)} chunk_count={len(chunks)}"
     )
     find_address_lines(pages, address)
 
@@ -156,12 +152,10 @@ def analyze_pdfs(
         setup_issues=setup_issues,
     )
     logger.info(
-        "Regex PDF analysis complete status=%s ocr_used=%s chunks_sent=%s missing=%s setup_issues=%s",
-        response.status,
-        response.meta.ocr_used,
-        response.meta.chunks_sent,
-        [review.key for review in response.building_right.needs_review],
-        response.setup_issues,
+        f"Regex PDF analysis complete status={response.status} "
+        f"ocr_used={response.meta.ocr_used} chunks_sent={response.meta.chunks_sent} "
+        f"missing={[review.key for review in response.building_right.needs_review]} "
+        f"setup_issues={response.setup_issues}"
     )
     return response
 
@@ -173,20 +167,20 @@ def analyze_detail_plan(
     force_refresh: bool = False,
 ) -> DetailPlanAnalysisResponse:
     plan_dir = detail_plan_cache_dir(detail_plan)
-    logger.info(
-        "Analyzing detail plan address=%s plan_id=%s plan_name=%s cache_dir=%s force_refresh=%s",
-        address,
+    detail_plan_id = (
         detail_plan.get("sysid")
         or detail_plan.get("planid")
-        or detail_plan.get("kovid"),
-        detail_plan.get("plannim"),
-        plan_dir,
-        force_refresh,
+        or detail_plan.get("kovid")
+    )
+    logger.info(
+        f"Analyzing detail plan address={address} plan_id={detail_plan_id} "
+        f"plan_name={detail_plan.get('plannim')} cache_dir={plan_dir} "
+        f"force_refresh={force_refresh}"
     )
     try:
         pdf_paths = download_plan_pdfs(detail_plan, force_refresh=force_refresh)
     except (PDFDownloadError, ValueError) as exc:
-        logger.warning("Failed loading detail-plan PDFs: %s", exc)
+        logger.warning(f"Failed loading detail-plan PDFs: {exc}")
         return DetailPlanAnalysisResponse(
             status=AnalysisStatus.NOT_FOUND,
             meta=DetailPlanMeta(
@@ -210,7 +204,7 @@ def analyze_detail_plan(
 def highest_overlap_detail_plan(parcel) -> dict[str, Any] | None:
     detail_plans = parcel.get_detail_plans()
     items = detail_plans.get("items", [])
-    logger.debug("Selecting highest-overlap detail plan count=%s", len(items))
+    logger.debug(f"Selecting highest-overlap detail plan count={len(items)}")
     if not items:
         return None
     selected = sorted(
@@ -219,11 +213,10 @@ def highest_overlap_detail_plan(parcel) -> dict[str, Any] | None:
         reverse=True,
     )[0]
     logger.info(
-        "Selected detail plan sysid=%s name=%s coverage_pct=%s intersection_area_m2=%s",
-        selected.get("sysid"),
-        selected.get("plannim"),
-        selected.get("parcel_coverage_pct"),
-        selected.get("intersection_area_m2"),
+        f"Selected detail plan sysid={selected.get('sysid')} "
+        f"name={selected.get('plannim')} "
+        f"coverage_pct={selected.get('parcel_coverage_pct')} "
+        f"intersection_area_m2={selected.get('intersection_area_m2')}"
     )
     return selected
 
@@ -236,7 +229,7 @@ def analyze_parcel_detail_plan(
 ) -> DetailPlanAnalysisResponse:
     detail_plan = highest_overlap_detail_plan(parcel)
     if detail_plan is None:
-        logger.warning("No overlapping detail plan found for address=%s", address)
+        logger.warning(f"No overlapping detail plan found for address={address}")
         return DetailPlanAnalysisResponse(
             status=AnalysisStatus.NOT_FOUND,
             meta=DetailPlanMeta(address=address),
@@ -253,9 +246,8 @@ def analyze_parcel_detail_plan(
 @time_function
 def process_planning_pdf(pdf_path: str, address: str = "") -> dict:
     logger.info(
-        "Processing single planning PDF with regex pdf_path=%s address=%s",
-        pdf_path,
-        address,
+        f"Processing single planning PDF with regex pdf_path={pdf_path} "
+        f"address={address}"
     )
     response = analyze_pdfs([Path(pdf_path)], address)
     return response.model_dump(mode="json")

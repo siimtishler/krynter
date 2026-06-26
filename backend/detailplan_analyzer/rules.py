@@ -85,10 +85,7 @@ def _candidate_from_match(
         value = spec.parser(raw) if spec.parser else parse_text(raw)
     except (TypeError, ValueError):
         logger.debug(
-            "Skipping regex candidate field=%s pattern=%s raw=%s",
-            spec.key,
-            regex.name,
-            raw,
+            f"Skipping regex candidate field={spec.key} pattern={regex.name} raw={raw}"
         )
         return None
 
@@ -396,9 +393,8 @@ def extract_building_rights(
     field_specs: tuple[FieldSpec, ...] = FIELD_SPECS,
 ) -> BuildingRightSection:
     logger.debug(
-        "Running regex building-right extraction chunks=%s pages=%s",
-        len(chunks),
-        [(chunk.pdf_path.name, chunk.page) for chunk in chunks],
+        f"Running regex building-right extraction chunks={len(chunks)} "
+        f"pages={[(chunk.pdf_path.name, chunk.page) for chunk in chunks]}"
     )
     fields: dict[str, ExtractedField] = {}
     reviews: list[ReviewItem] = []
@@ -408,18 +404,18 @@ def extract_building_rights(
         fields[spec.key] = field
         reviews.extend(field.needs_review)
 
+    extracted_fields = {
+        key: {
+            "value": field.value,
+            "unit": field.unit,
+            "candidates": len(field.candidates),
+            "page": field.evidence.page if field.evidence else None,
+        }
+        for key, field in fields.items()
+    }
     logger.debug(
-        "Regex building-right extracted=%s missing=%s",
-        {
-            key: {
-                "value": field.value,
-                "unit": field.unit,
-                "candidates": len(field.candidates),
-                "page": field.evidence.page if field.evidence else None,
-            }
-            for key, field in fields.items()
-        },
-        [review.key for review in reviews],
+        f"Regex building-right extracted={extracted_fields} "
+        f"missing={[review.key for review in reviews]}"
     )
     return BuildingRightSection(fields=fields, needs_review=reviews)
 

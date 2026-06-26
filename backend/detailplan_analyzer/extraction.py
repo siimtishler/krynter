@@ -112,18 +112,14 @@ def pdf_has_text(pdf_path: Path, min_chars: int = 100) -> bool:
                 text_len += len(document.load_page(page_index).get_text("text").strip())
                 if text_len >= min_chars:
                     logger.debug(
-                        "PDF has text pdf=%s sampled_pages=%s sampled_chars=%s",
-                        pdf_path,
-                        page_index + 1,
-                        text_len,
+                        f"PDF has text pdf={pdf_path} "
+                        f"sampled_pages={page_index + 1} sampled_chars={text_len}"
                     )
                     return True
     except Exception:
-        logger.exception("Failed checking PDF text pdf=%s", pdf_path)
+        logger.exception(f"Failed checking PDF text pdf={pdf_path}")
         return False
-    logger.debug(
-        "PDF has insufficient text pdf=%s sampled_chars=%s", pdf_path, text_len
-    )
+    logger.debug(f"PDF has insufficient text pdf={pdf_path} sampled_chars={text_len}")
     return False
 
 
@@ -134,15 +130,15 @@ def prepare_pdf_for_text(
     force_refresh: bool = False,
 ) -> tuple[Path, bool]:
     if pdf_has_text(pdf_path):
-        logger.debug("Using embedded PDF text pdf=%s", pdf_path)
+        logger.debug(f"Using embedded PDF text pdf={pdf_path}")
         return pdf_path, False
 
     ocr_pdf = pdf_path.with_name(f"{pdf_path.stem}_ocr.pdf")
     if not force_refresh and ocr_pdf.exists() and pdf_has_text(ocr_pdf):
-        logger.debug("Using cached OCR PDF raw_pdf=%s ocr_pdf=%s", pdf_path, ocr_pdf)
+        logger.debug(f"Using cached OCR PDF raw_pdf={pdf_path} ocr_pdf={ocr_pdf}")
         return ocr_pdf, True
 
-    logger.info("PDF needs OCR pdf=%s", pdf_path)
+    logger.info(f"PDF needs OCR pdf={pdf_path}")
     return run_ocr(pdf_path, ocr_pdf, runtime), True
 
 
@@ -163,11 +159,8 @@ def extract_pages(pdf_path: Path) -> list[PageText]:
     non_empty = sum(1 for page in pages if page.normalized_text.strip())
     total_chars = sum(len(page.normalized_text) for page in pages)
     logger.debug(
-        "Extracted pages pdf=%s page_count=%s non_empty_pages=%s normalized_chars=%s",
-        pdf_path,
-        len(pages),
-        non_empty,
-        total_chars,
+        f"Extracted pages pdf={pdf_path} page_count={len(pages)} "
+        f"non_empty_pages={non_empty} normalized_chars={total_chars}"
     )
     return pages
 
@@ -180,14 +173,12 @@ def extract_pages_cached(pdf_path: Path, force_refresh: bool = False) -> list[Pa
             payload = json.loads(cache_path.read_text(encoding="utf-8"))
             pages = [_deserialize_page(item) for item in payload["pages"]]
             logger.debug(
-                "Using cached page text pdf=%s cache=%s page_count=%s",
-                pdf_path,
-                cache_path,
-                len(pages),
+                f"Using cached page text pdf={pdf_path} cache={cache_path} "
+                f"page_count={len(pages)}"
             )
             return pages
         except (KeyError, TypeError, json.JSONDecodeError):
-            logger.exception("Failed reading page text cache cache=%s", cache_path)
+            logger.exception(f"Failed reading page text cache cache={cache_path}")
 
     pages = extract_pages(pdf_path)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -202,7 +193,7 @@ def extract_pages_cached(pdf_path: Path, force_refresh: bool = False) -> list[Pa
         ),
         encoding="utf-8",
     )
-    logger.debug("Cached page text pdf=%s cache=%s", pdf_path, cache_path)
+    logger.debug(f"Cached page text pdf={pdf_path} cache={cache_path}")
     return pages
 
 
@@ -255,11 +246,8 @@ def select_relevant_chunks(
 ) -> list[TextChunk]:
     variants = address_variants(address)
     logger.debug(
-        "Selecting chunks address=%s variants=%s page_count=%s max_chunks=%s",
-        address,
-        variants,
-        len(pages),
-        max_chunks,
+        f"Selecting chunks address={address} variants={variants} "
+        f"page_count={len(pages)} max_chunks={max_chunks}"
     )
     scored = [
         (page, *_page_score(page, variants))
@@ -293,19 +281,19 @@ def select_relevant_chunks(
         )
         for page, score, reasons in candidates[:max_chunks]
     ]
+    selected_chunks = [
+        {
+            "pdf": chunk.pdf_path.name,
+            "page": chunk.page,
+            "score": chunk.score,
+            "reasons": chunk.reasons,
+            "chars": len(chunk.text),
+            "snippet": chunk.text[:220],
+        }
+        for chunk in chunks
+    ]
     logger.debug(
-        "Selected chunks: %s",
-        [
-            {
-                "pdf": chunk.pdf_path.name,
-                "page": chunk.page,
-                "score": chunk.score,
-                "reasons": chunk.reasons,
-                "chars": len(chunk.text),
-                "snippet": chunk.text[:220],
-            }
-            for chunk in chunks
-        ],
+        f"Selected chunks: {selected_chunks}",
     )
     return chunks
 
@@ -325,9 +313,7 @@ def find_address_lines(pages: list[PageText], address: str) -> list[Evidence]:
                     )
                 )
     logger.debug(
-        "Found address lines address=%s count=%s first_matches=%s",
-        address,
-        len(matches),
-        [match.model_dump() for match in matches[:5]],
+        f"Found address lines address={address} count={len(matches)} "
+        f"first_matches={[match.model_dump() for match in matches[:5]]}"
     )
     return matches

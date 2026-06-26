@@ -50,10 +50,8 @@ def return_detail_plan_analysis(
     force_refresh: bool = False,
 ):
     logger.info(
-        "detail-plan-analysis request type=%s searchable=%s force_refresh=%s",
-        type,
-        searchable,
-        force_refresh,
+        f"detail-plan-analysis request type={type} searchable={searchable} "
+        f"force_refresh={force_refresh}"
     )
     if type == "address":
         parcel: Parcel | None = find_parcel_by_address(address=searchable)
@@ -76,10 +74,8 @@ def return_detail_plan_analysis(
         force_refresh=force_refresh,
     )
     logger.info(
-        "detail-plan-analysis response status=%s chunks=%s setup_issues=%s",
-        result.status,
-        result.meta.chunks_sent,
-        result.setup_issues,
+        f"detail-plan-analysis response status={result.status} "
+        f"chunks={result.meta.chunks_sent} setup_issues={result.setup_issues}"
     )
     return result.model_dump(mode="json")
 
