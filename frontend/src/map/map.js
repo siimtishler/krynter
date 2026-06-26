@@ -7,6 +7,9 @@ import { throttle } from '../utils/utils.js';
 
 const KERESE_CENTER = [24.709819, 59.3795179]
 const KERESE_BOUNDS = [24.7020503, 59.3770407, 24.7175878, 59.3819951]
+const DETAIL_PLAN_SOURCE_ID = 'detail-plans'
+const DETAIL_PLAN_FILL_LAYER_ID = 'detail-plan-fill'
+const DETAIL_PLAN_LINE_LAYER_ID = 'detail-plan-line'
 
 function addMapEvents(map, options) {
     let hoveredTunnus = null
@@ -49,6 +52,112 @@ function addMapEvents(map, options) {
             options.onParcelClick(feature);
         }
     })
+}
+
+function setLayerVisibility(map, layerIds, visible) {
+    const visibility = visible ? 'visible' : 'none'
+    for (const layerId of layerIds) {
+        if (map.getLayer(layerId)) {
+            map.setLayoutProperty(layerId, 'visibility', visibility)
+        }
+    }
+}
+
+function ensureDetailPlanLayers(map) {
+    if (map.getSource(DETAIL_PLAN_SOURCE_ID)) {
+        return
+    }
+
+    map.addSource(DETAIL_PLAN_SOURCE_ID, {
+        type: 'geojson',
+        data: `${API_BASE_URL}/api/detail-plans/geojson`
+    })
+
+    map.addLayer({
+        id: DETAIL_PLAN_FILL_LAYER_ID,
+        type: 'fill',
+        source: DETAIL_PLAN_SOURCE_ID,
+        layout: {
+            visibility: 'visible',
+        },
+        paint: {
+            'fill-color': [
+                'match',
+                ['get', 'planseis_nimi'],
+                'kehtiv',
+                '#f97316',
+                '#64748b',
+            ],
+            'fill-opacity': 0.22,
+        }
+    })
+
+    map.addLayer({
+        id: DETAIL_PLAN_LINE_LAYER_ID,
+        type: 'line',
+        source: DETAIL_PLAN_SOURCE_ID,
+        layout: {
+            visibility: 'visible',
+        },
+        paint: {
+            'line-color': [
+                'match',
+                ['get', 'planseis_nimi'],
+                'kehtiv',
+                '#ea580c',
+                '#475569',
+            ],
+            'line-width': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                11,
+                0.8,
+                15,
+                2.2,
+            ],
+        },
+    })
+
+}
+
+function createDetailPlanToggleControl(map) {
+    return {
+        onAdd() {
+            const container = document.createElement('div')
+            container.className = 'map-layer-control maplibregl-ctrl'
+
+            const label = document.createElement('label')
+            label.className = 'map-layer-control__label'
+            container.appendChild(label)
+
+            const checkbox = document.createElement('input')
+            checkbox.type = 'checkbox'
+            label.appendChild(checkbox)
+
+            const text = document.createElement('span')
+            text.textContent = 'Detailplaneeringud'
+            label.appendChild(text)
+
+            checkbox.addEventListener('change', () => {
+                if (checkbox.checked) {
+                    ensureDetailPlanLayers(map)
+                }
+
+                setLayerVisibility(
+                    map,
+                    [
+                        DETAIL_PLAN_FILL_LAYER_ID,
+                        DETAIL_PLAN_LINE_LAYER_ID,
+                    ],
+                    checkbox.checked,
+                )
+            })
+
+            return container
+        },
+        onRemove() {},
+    }
 }
 
 function addParcelLayers(map) {
@@ -110,8 +219,9 @@ export function createMap(id, options = {}) {
     })
     
     map.on("load", () => {
-        addParcelLayers(map);
-        addMapEvents(map, options);
+        addParcelLayers(map)
+        addMapEvents(map, options)
+        map.addControl(createDetailPlanToggleControl(map), 'top-left')
     })
 
     return map

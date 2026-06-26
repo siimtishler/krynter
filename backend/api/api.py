@@ -11,6 +11,9 @@ from backend.geo import (
     find_parcel_by_address,
     find_parcel_by_cadastre_code,
 )
+from backend.geo.constants import DETAIL_PLAN_RESPONSE_COLUMNS
+from backend.geo.datasets import get_detail_plans
+from backend.geo.serializers import row_to_geojson_dict
 
 router = APIRouter()
 
@@ -78,6 +81,26 @@ def return_detail_plan_analysis(
         f"chunks={result.meta.chunks_sent} setup_issues={result.setup_issues}"
     )
     return result.model_dump(mode="json")
+
+
+@router.get("/detail-plans/geojson")
+def return_detail_plans_geojson():
+    detail_plans = get_detail_plans()
+    features = []
+    for _, row in detail_plans.iterrows():
+        serialized = row_to_geojson_dict(row, DETAIL_PLAN_RESPONSE_COLUMNS)
+        geometry = serialized.pop("geometry")
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": geometry,
+                "properties": serialized,
+            }
+        )
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+    }
 
 
 @router.get("/nearby_pois")
