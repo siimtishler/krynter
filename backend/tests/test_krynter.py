@@ -383,6 +383,41 @@ def test_shape_to_frontend_geojson_returns_mapping():
     assert len(result["coordinates"]) == 2
 
 
+def test_detail_plans_geojson_endpoint_returns_feature_collection(monkeypatch):
+    detail_plans = gpd.GeoDataFrame(
+        [
+            {
+                "sysid": 1,
+                "planid": 2.0,
+                "kovid": "DP001",
+                "plannim": "Test detailplaneering",
+                "korraldaja": "Tallinn",
+                "planseis_nimi": "kehtiv",
+                "planeesm": "Test",
+                "planviide": "https://example.test/plan",
+                "algatkp_timeposition": "2024-01-01",
+                "vastuvkp_timeposition": None,
+                "kehtestkp_timeposition": None,
+                "url": "https://example.test",
+                "failid": "https://example.test/files",
+                "geometry": box(0, 0, 1, 1),
+            }
+        ],
+        crs="EPSG:3301",
+    )
+    monkeypatch.setattr(api, "get_detail_plans", lambda: detail_plans)
+
+    response = api.return_detail_plans_geojson()
+
+    assert response["type"] == "FeatureCollection"
+    assert len(response["features"]) == 1
+    feature = response["features"][0]
+    assert feature["type"] == "Feature"
+    assert feature["geometry"]["type"] == "Polygon"
+    assert feature["properties"]["kovid"] == "DP001"
+    assert "geometry" not in feature["properties"]
+
+
 def test_spatial_intersections_filters_non_overlapping_candidates():
     source = gpd.GeoDataFrame(
         [
