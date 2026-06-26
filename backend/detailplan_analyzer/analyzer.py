@@ -29,7 +29,10 @@ from backend.detailplan_analyzer.pdfs import (
     detail_plan_cache_dir,
     download_plan_pdfs,
 )
-from backend.detailplan_analyzer.rules import extract_building_rights
+from backend.detailplan_analyzer.rules import (
+    compact_parcel_context,
+    extract_building_rights,
+)
 
 
 def empty_building_right() -> BuildingRightSection:
@@ -70,6 +73,7 @@ def analyze_pdfs(
     pdf_paths: list[Path],
     address: str,
     detail_plan: dict[str, Any] | None = None,
+    parcel_attributes: dict[str, Any] | None = None,
     cache_dir: Path | None = None,
     force_refresh: bool = False,
 ) -> DetailPlanAnalysisResponse:
@@ -87,6 +91,7 @@ def analyze_pdfs(
     meta = DetailPlanMeta(
         address=address,
         detail_plan=detail_plan,
+        parcel_context=compact_parcel_context(parcel_attributes),
         source_pdfs=[path.name for path in pdf_paths],
         cache_dir=str(cache_dir) if cache_dir else None,
     )
@@ -138,8 +143,9 @@ def analyze_pdfs(
     )
     find_address_lines(pages, address)
 
-    building_right = (
-        extract_building_rights(chunks) if chunks else empty_building_right()
+    building_right = extract_building_rights(
+        chunks,
+        parcel_attributes=parcel_attributes,
     )
     if not chunks:
         setup_issues.append("PDFidest ei leitud regex-analüüsiks sobivaid tekstilehti.")
@@ -164,6 +170,7 @@ def analyze_pdfs(
 def analyze_detail_plan(
     detail_plan: dict[str, Any],
     address: str,
+    parcel_attributes: dict[str, Any] | None = None,
     force_refresh: bool = False,
 ) -> DetailPlanAnalysisResponse:
     plan_dir = detail_plan_cache_dir(detail_plan)
@@ -186,6 +193,7 @@ def analyze_detail_plan(
             meta=DetailPlanMeta(
                 address=address,
                 detail_plan=detail_plan,
+                parcel_context=compact_parcel_context(parcel_attributes),
                 cache_dir=str(plan_dir),
             ),
             building_right=empty_building_right(),
@@ -195,6 +203,7 @@ def analyze_detail_plan(
         pdf_paths=pdf_paths,
         address=address,
         detail_plan=detail_plan,
+        parcel_attributes=parcel_attributes,
         cache_dir=plan_dir,
         force_refresh=force_refresh,
     )
@@ -239,6 +248,7 @@ def analyze_parcel_detail_plan(
     return analyze_detail_plan(
         detail_plan,
         address,
+        parcel_attributes=parcel.attributes(),
         force_refresh=force_refresh,
     )
 

@@ -18,6 +18,8 @@ class AnalysisStatus(StrEnum):
 class SourceType(StrEnum):
     REGEX = "regex"
     PDF = "pdf"
+    CADASTRE = "cadastre"
+    DERIVED = "derived"
 
 
 class Evidence(BaseModel):
@@ -71,6 +73,7 @@ class SourceReference(BaseModel):
 class DetailPlanMeta(BaseModel):
     address: str
     detail_plan: dict[str, Any] = Field(default_factory=dict)
+    parcel_context: dict[str, Any] = Field(default_factory=dict)
     source_pdfs: list[str] = Field(default_factory=list)
     ocr_used: bool = False
     chunks_sent: int = 0

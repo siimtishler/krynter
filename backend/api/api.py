@@ -66,7 +66,8 @@ def return_detail_plan_analysis(
     if parcel is None:
         raise HTTPException(status_code=404, detail="Parcel not found")
 
-    address = parcel.attributes().get("l_aadress") or searchable
+    parcel_attributes = parcel.attributes()
+    address = parcel_attributes.get("l_aadress") or searchable
     detail_plan = highest_overlap_detail_plan(parcel)
     if detail_plan is None:
         raise HTTPException(status_code=404, detail="Detail plan not found")
@@ -74,6 +75,7 @@ def return_detail_plan_analysis(
     result = analyze_detail_plan(
         detail_plan=detail_plan,
         address=address,
+        parcel_attributes=parcel_attributes,
         force_refresh=force_refresh,
     )
     logger.info(
