@@ -205,7 +205,7 @@ def test_regex_extracts_roof_pitch_alternatives_and_kinnistu_size(tmp_path):
     assert fields["katusekalle"].value == "0-13 või 45-48"
 
 
-def test_regex_preserves_all_candidates_and_selects_best(tmp_path):
+def test_regex_preserves_all_candidates_and_marks_conflict(tmp_path):
     chunk = TextChunk(
         pdf_path=tmp_path / "plan.pdf",
         page=1,
@@ -217,8 +217,125 @@ def test_regex_preserves_all_candidates_and_selects_best(tmp_path):
     result = extract_building_rights([chunk])
     field = result.fields["taisehitus_pct"]
 
-    assert field.value == 25
+    assert field.value is None
     assert [candidate.value for candidate in field.candidates] == [25, 30]
+    assert field.candidates[0].rank == 1
+    assert field.candidates[0].quality == "strong"
+    assert field.candidates[0].score is not None
+    assert field.needs_review
+
+
+def test_strong_single_candidate_fills_direct_value(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=1,
+        text="Krundi ehitusõigus\nLubatud suurim täisehitus 25%\n",
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+    field = result.fields["taisehitus_pct"]
+
+    assert field.value == 25
+    assert field.candidates[0].quality == "strong"
+    assert field.candidates[0].context
+
+
+def test_floor_false_positive_is_not_direct_value(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=3,
+        text=(
+            "Kontaktvööndis on erinevaid kõrgusi ja mahte.\n"
+            "Suurem korruselisus avaks huvitavad vaated kõikidesse ilmakaartesse.\n"
+        ),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+    field = result.fields["lubatud_korrused"]
+
+    assert field.value is None
+    assert field.candidates == []
+    assert field.needs_review
+
+
+def test_table_like_floor_candidate_is_kept_and_selected(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=3,
+        text=(
+            "Krundi ehitusõigus\n"
+            "Hoonete suurim lubatud maapealne korruselisus\n"
+            "4 (hoone I)\n"
+            "Hoonete suurim lubatud maa-alune korruselisus\n"
+            "-1 (hoone I)\n"
+        ),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+    field = result.fields["lubatud_korrused"]
+
+    assert field.value == "4 (hoone I)"
+    assert any(candidate.raw_value == "4 (hoone I)" for candidate in field.candidates)
+    assert any(
+        "underground_floor_context" in candidate.flags for candidate in field.candidates
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Piirdeaia maksimaalne kõrgus maapinnast on 1,5 m.\n",
+        "Krundid piirata traatvõrkaiaga (kõrgus kuni 2,0m).\n",
+    ],
+)
+def test_fence_height_candidate_is_not_direct_building_height(tmp_path, text):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=5,
+        text=text,
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+    field = result.fields["hoonete_lubatud_korgused_m"]
+
+    assert field.value is None
+    assert field.candidates
+    assert field.candidates[0].quality == "weak"
+    assert "not_building_height" in field.candidates[0].flags
+
+
+def test_maximum_building_height_beats_fence_height_candidate(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=5,
+        text=(
+            "Paariselamu maksimaalne kõrgus olemasolevast maapinnast "
+            "katuseharjale on 8,5m.\n"
+            "Piire: puidust või võrgust, kõrgusega kuni 1,5m.\n"
+        ),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+    field = result.fields["hoonete_lubatud_korgused_m"]
+
+    assert field.value == "8,5"
+    assert any(candidate.value == "8,5" for candidate in field.candidates)
+    fence_candidates = [
+        candidate for candidate in field.candidates if candidate.value == "1,5"
+    ]
+    assert fence_candidates
+    assert fence_candidates[0].quality == "weak"
+    assert "not_building_height" in fence_candidates[0].flags
 
 
 def test_cadastre_context_fills_missing_area_land_use_and_ownership():
@@ -238,6 +355,34 @@ def test_cadastre_context_fills_missing_area_land_use_and_ownership():
     assert fields["krundi_pind_m2"].source_type == "cadastre"
     assert fields["kasutusotstarve"].value == "elamumaa 100%"
     assert fields["omandivorm"].value == "Eraomand"
+
+
+def test_cadastre_land_use_and_ownership_skip_regex_when_context_exists(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=1,
+        text=("Sihtotstarve: on elamumaa.\n" "Omandivorm: avalik tekst\n"),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights(
+        [chunk],
+        parcel_attributes={
+            "siht1": "ELAMUMAA",
+            "so_prts1": 75,
+            "siht2": "ARIMAA",
+            "so_prts2": 25,
+            "omvorm": "Eraomand",
+        },
+    )
+
+    assert result.fields["kasutusotstarve"].value == "elamumaa 75%, arimaa 25%"
+    assert result.fields["kasutusotstarve"].source_type == "cadastre"
+    assert len(result.fields["kasutusotstarve"].candidates) == 1
+    assert result.fields["kasutusotstarve"].needs_review == []
+    assert result.fields["omandivorm"].value == "Eraomand"
+    assert result.fields["omandivorm"].source_type == "cadastre"
 
 
 def test_pdf_area_is_preferred_when_close_to_cadastre_and_derived_values_verify(
@@ -370,6 +515,13 @@ def test_analyze_pdfs_returns_direct_regex_response(monkeypatch, tmp_path):
 
     assert response.building_right.fields["krundi_pind_m2"].value == 1000
     assert response.building_right.fields["taisehitus_pct"].value == 25
+    candidate_dump = response.model_dump(mode="json")["building_right"]["fields"][
+        "taisehitus_pct"
+    ]["candidates"][0]
+    assert candidate_dump["rank"] == 1
+    assert candidate_dump["quality"] == "strong"
+    assert candidate_dump["score"] is not None
+    assert candidate_dump["context"]
     assert "llm_status" not in response.meta.model_dump()
     assert "analysis_id" not in response.meta.model_dump()
 
