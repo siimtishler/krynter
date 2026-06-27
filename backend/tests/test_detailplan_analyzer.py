@@ -33,7 +33,11 @@ from backend.detailplan_analyzer.pdfs import (
     cached_plan_pdfs,
     extract_relevant_pdfs,
 )
-from backend.detailplan_analyzer.rules import extract_building_rights
+from backend.detailplan_analyzer.rules import (
+    address_matches_text,
+    extract_building_rights,
+    normalize_address_key,
+)
 from backend.geo import Parcel
 
 
@@ -128,6 +132,92 @@ def test_select_relevant_chunks_uses_address_and_downranks_toc(tmp_path):
     chunks = select_relevant_chunks(pages, "Kaupmehe tn 19", max_chunks=2)
 
     assert [chunk.page for chunk in chunks] == [2, 3]
+
+
+def test_address_matching_normalizes_road_type_punctuation_and_ocr_joining():
+    assert normalize_address_key("Kreegi tn 1a") == "kreegi tn 1a"
+    assert address_matches_text(
+        "Sinilille tn 13",
+        "Katusekalle:Sinililletn,13 0° - 40°",
+    )
+    assert address_matches_text("Kreegi tn 1a", "Krunt nr.2(Kreegi tn.1A)")
+    assert not address_matches_text("Sinilille tn 13", "Sinilille tn 13a")
+
+
+def test_address_scoped_roof_pitch_uses_pitch_not_address_number(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=6,
+        text=(
+            "e —Hoonete arv krundil: Sinilille tn.13— 1 elamu ja 2 abihoonet, "
+            "Sinilille tn,13a — 1 elamu\n"
+            "¢ Katusekalle:Sinililletn,13 0° - 40° "
+            "(olemasolev 1,5 korruseline elamu),\n"
+            "Sinilille tn.13a 0° - 20° (planeeritav elamu)\n"
+        ),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk], target_address="Sinilille tn 13")
+
+    assert result.fields["katusekalle"].value == "0-40"
+    assert result.fields["katusekalle"].value != "13"
+
+
+def test_address_scoped_building_count_sums_building_nouns(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=6,
+        text=(
+            "Hoonete arv krundil: Sinilille tn.13— 1 elamu ja 2 abihoonet, "
+            "Sinilille tn,13a — 1 elamu\n"
+        ),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk], target_address="Sinilille tn 13")
+
+    assert result.fields["hoonete_arv"].value == 3
+
+
+def test_same_street_wrong_number_candidates_do_not_fill_target_field(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=4,
+        text="Nelgi 4 – kinnistu pind -599 m2, ehitusalune pind 102 m2, täisehitus 17%.\n",
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk], target_address="Nelgi tn 6")
+
+    assert result.fields["ehitusalune_pind_m2"].value is None
+    assert result.fields["taisehitus_pct"].value is None
+    assert result.fields["ehitusalune_pind_m2"].candidates[0].quality == "weak"
+
+
+def test_suffixed_neighbor_address_does_not_outrank_selected_address(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=2,
+        text=(
+            "Moodustavale kinnistule Lootuse pst.64 jääb olemasolev üksikelamu.\n"
+            "Maksimaalne hoonestuse kõrgus 8 m (abs. kõrgus +54,6). "
+            "Maksimaalne täisehitus 12 %. Hoone katusekalle säilitada endisena.\n"
+            "Moodustavale kinnistule Lootuse pst.64 A on ette nähtud üksikelamu.\n"
+            "Krundi maksimaalne täisehitus 16 %. Hoone katusekalle "
+            "soovitavalt maksimaalselt 20 kraadi.\n"
+        ),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk], target_address="Lootuse pst 64")
+
+    assert result.fields["taisehitus_pct"].value == 12
+    assert result.fields["katusekalle"].value is None
 
 
 def test_regex_extracts_building_right_fields(tmp_path):
@@ -908,6 +998,7 @@ def test_detail_plan_analysis_api_uses_highest_overlap_and_returns_json(monkeypa
         address,
         parcel_attributes=None,
         force_refresh=False,
+        enable_llm_resolver=None,
     ):
         captured["parcel_attributes"] = parcel_attributes
         return expected

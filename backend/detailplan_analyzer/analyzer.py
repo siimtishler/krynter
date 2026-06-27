@@ -75,7 +75,9 @@ def _status_for(
     return AnalysisStatus.OK
 
 
-def _llm_resolver_enabled() -> bool:
+def _llm_resolver_enabled(enable_llm_resolver) -> bool:
+    if enable_llm_resolver is not None:
+        return enable_llm_resolver
     return config.detail_plan_llm_resolver_enabled
 
 
@@ -85,8 +87,9 @@ def _maybe_resolve_with_llm(
     setup_issues: list[str],
     chunks: list[TextChunk],
     llm_provider: LLMResolverProvider | None,
+    enable_llm_resolver: bool | None = None,
 ) -> None:
-    if not _llm_resolver_enabled():
+    if not _llm_resolver_enabled(enable_llm_resolver):
         return
     if setup_issues or not chunks:
         logger.info(
@@ -114,6 +117,7 @@ def analyze_pdfs(
     parcel_attributes: dict[str, Any] | None = None,
     cache_dir: Path | None = None,
     force_refresh: bool = False,
+    enable_llm_resolver: bool | None = None,
     llm_provider: LLMResolverProvider | None = None,
 ) -> DetailPlanAnalysisResponse:
     detail_plan = detail_plan or {}
@@ -188,6 +192,7 @@ def analyze_pdfs(
     building_right = extract_building_rights(
         chunks,
         parcel_attributes=parcel_attributes,
+        target_address=address,
     )
     if not chunks:
         setup_issues.append("PDFidest ei leitud regex-analüüsiks sobivaid tekstilehti.")
@@ -197,6 +202,7 @@ def analyze_pdfs(
         setup_issues=setup_issues,
         chunks=chunks,
         llm_provider=llm_provider,
+        enable_llm_resolver=enable_llm_resolver,
     )
 
     response = DetailPlanAnalysisResponse(
@@ -257,6 +263,7 @@ def analyze_detail_plan(
         parcel_attributes=parcel_attributes,
         cache_dir=plan_dir,
         force_refresh=force_refresh,
+        enable_llm_resolver=enable_llm_resolver,
         llm_provider=llm_provider,
     )
 

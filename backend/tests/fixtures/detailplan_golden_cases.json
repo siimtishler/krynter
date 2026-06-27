@@ -1,0 +1,66 @@
+[
+  {
+    "id": "mai_tn_2a",
+    "type": "address",
+    "searchable": "Mai tn 2a",
+    "plan_id": "30109024",
+    "expected": {
+      "taisehitus_pct": {"value": 25.0, "unit": "%"},
+      "ehitusalune_pind_m2": {"value": 440.0, "unit": "m2"},
+      "hoonete_arv": {"value": 2, "unit": null},
+      "katusekalle": {"value": "0-45", "unit": "degrees"}
+    }
+  },
+  {
+    "id": "sinilille_tn_13",
+    "type": "address",
+    "searchable": "Sinilille tn 13",
+    "plan_id": "30109640",
+    "expected": {
+      "krundi_pind_m2": {"value": 1279.0, "unit": "m2"},
+      "taisehitus_pct": {"value": 16.0, "unit": "%"},
+      "ehitusalune_pind_m2": {"value": 210.0, "unit": "m2"},
+      "hoonete_arv": {"value": 3, "unit": null},
+      "katusekalle": {"value": "0-40", "unit": "degrees"}
+    }
+  },
+  {
+    "id": "nelgi_tn_6",
+    "type": "address",
+    "searchable": "Nelgi tn 6",
+    "plan_id": "30109192",
+    "expected": {
+      "taisehitus_pct": {"value": 13.0, "unit": "%"},
+      "ehitusalune_pind_m2": {"value": 315.0, "unit": "m2"},
+      "hoonete_arv": {"value": 1, "unit": null},
+      "lubatud_korrused": {"value": "3/-1", "unit": null},
+      "hoonete_lubatud_korgused_m": {"value": "11", "unit": "m"}
+    }
+  },
+  {
+    "id": "kreegi_tn_1a",
+    "type": "address",
+    "searchable": "Kreegi tn 1a",
+    "plan_id": "30108781",
+    "expected": {
+      "krundi_pind_m2": {"value": 1848.0, "unit": "m2"},
+      "taisehitus_pct": {"value": 14.0, "unit": "%"},
+      "ehitusalune_pind_m2": {"value": 266.0, "unit": "m2"},
+      "hoonete_arv": {"value": 1, "unit": null},
+      "tulepusivusklass": {"value": "TP3", "unit": null},
+      "hoonete_lubatud_korgused_m": {"value": "10,0", "unit": "m"}
+    }
+  },
+  {
+    "id": "lootuse_pst_64",
+    "type": "address",
+    "searchable": "Lootuse pst 64",
+    "plan_id": "30108955",
+    "expected": {
+      "krundi_pind_m2": {"value": 1530.0, "unit": "m2"},
+      "taisehitus_pct": {"value": 12.0, "unit": "%"},
+      "hoonete_lubatud_korgused_m": {"value": "8", "unit": "m"},
+      "brutopind_m2": {"value": 750, "unit": "m2"}
+    }
+  }
+]

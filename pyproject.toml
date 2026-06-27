@@ -39,6 +39,9 @@ entrypoint = "backend.main:app"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+markers = [
+    "integration: tests that require local data files and cached/detail-plan PDF flow",
+]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
