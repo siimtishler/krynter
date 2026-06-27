@@ -101,6 +101,7 @@ POI_RESPONSE_COLUMNS = [
     "alamgrupp",
     "ylemgrupp",
     "poi_type",
+    "www",
 ]
 
 HERITAGE_POI_RESPONSE_COLUMNS = [

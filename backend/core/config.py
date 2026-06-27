@@ -15,7 +15,7 @@ class Config(BaseSettings):
     ollama_building_right_model: str = "gemma3:4b"
     ollama_timeout_s: float = 600
     cadastre_vector_file: Path = DATA_DIR / "tallinn_parcels"
-    poi_file: Path = DATA_DIR / "Tallinn_POIS2.gpkg"
+    poi_file: Path = DATA_DIR / "Tallinn_POIS3.gpkg"
     cadastre_file: Path = DATA_DIR / "Tallinn_KATASTER_GPKG2.gpkg"
     noise_file: Path = DATA_DIR / "myra_tln.gpkg"
     heritage_poi_file: Path = DATA_DIR / "muinsuskaitse_poi.gpkg"

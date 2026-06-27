@@ -53,6 +53,9 @@ def _poi_row_to_dict(poi: pd.Series) -> dict:
         value = response_value(poi.get(column))
         if column == "kaugus_m" and value is not None:
             value = float(value)
+        if column == "alamgrupp":
+            if isinstance(value, str):
+                value = value.capitalize()
         result[column] = value
 
     result["geometry"] = shape_to_frontend_geojson(poi.geometry)

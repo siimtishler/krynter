@@ -75,7 +75,7 @@ def average_noise_from_area(
     if mapped_pct >= 100 - COVERAGE_TOLERANCE_PCT:
         avg_db = mapped_weighted_db
         result_type = "exact"
-        label = f"average = {avg_db:.1f} dB"
+        label = f"Keskmine = {avg_db:.1f} dB"
         avg_db_upper = None
     else:
         avg_db = None
@@ -85,7 +85,7 @@ def average_noise_from_area(
             if geometry_area
             else 0.0
         )
-        label = f"average < {avg_db_upper:.1f} dB"
+        label = f"Keskmine < {avg_db_upper:.1f} dB"
 
     return {
         "label": label,
