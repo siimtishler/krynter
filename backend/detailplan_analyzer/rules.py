@@ -37,6 +37,163 @@ class FieldSpec:
     parser: ValueParser | None = None
 
 
+@dataclass(frozen=True)
+class ParsedAddress:
+    street: str
+    road_type: str
+    number: str
+
+    @property
+    def normalized_number(self) -> str:
+        return _normalize_address_number(self.number)
+
+
+PARCEL_CONTEXT_KEYS = (
+    "tunnus",
+    "pindala",
+    "siht1",
+    "siht2",
+    "siht3",
+    "so_prts1",
+    "so_prts2",
+    "so_prts3",
+    "omvorm",
+)
+
+
+ROAD_TYPE_ALIASES = {
+    "tn": "tn",
+    "tänav": "tn",
+    "pst": "pst",
+    "puiestee": "pst",
+    "mnt": "mnt",
+    "maantee": "mnt",
+}
+
+ROAD_TYPE_PATTERN = r"tn|tänav|pst|puiestee|mnt|maantee"
+ESTONIAN_LETTER_PATTERN = r"A-Za-zÕÄÖÜŠŽõäöüšž"
+
+
+def _normalize_address_number(value: str) -> str:
+    return re.sub(r"\s+", "", value).lower()
+
+
+def _normalize_street(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().casefold())
+
+
+def parse_detail_address(address: str) -> ParsedAddress | None:
+    match = re.match(
+        rf"^\s*(?P<street>.+?)\s+"
+        rf"(?P<road>{ROAD_TYPE_PATTERN})\.?\s*"
+        rf"(?P<number>\d+\s*[a-zA-Z]?)\s*$",
+        address,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    road_type = ROAD_TYPE_ALIASES.get(match.group("road").casefold())
+    if road_type is None:
+        return None
+    return ParsedAddress(
+        street=_normalize_street(match.group("street")),
+        road_type=road_type,
+        number=_normalize_address_number(match.group("number")),
+    )
+
+
+def normalize_address_key(address: str) -> str | None:
+    parsed = parse_detail_address(address)
+    if parsed is None:
+        return None
+    return f"{parsed.street} {parsed.road_type} {parsed.normalized_number}"
+
+
+def _number_regex(number: str) -> str:
+    match = re.match(r"(?P<base>\d+)(?P<suffix>[a-zA-Z]?)$", number)
+    if match is None:
+        return re.escape(number)
+    base = re.escape(match.group("base"))
+    suffix = match.group("suffix")
+    if suffix:
+        return rf"{base}\s*{re.escape(suffix)}(?![{ESTONIAN_LETTER_PATTERN}0-9])"
+    return rf"{base}(?!\s*[a-zA-Z](?![{ESTONIAN_LETTER_PATTERN}]))"
+
+
+def _street_regex(parsed: ParsedAddress) -> str:
+    return r"\s*".join(re.escape(part) for part in parsed.street.split())
+
+
+def _target_address_regex(parsed: ParsedAddress) -> re.Pattern[str]:
+    return re.compile(
+        rf"\b{_street_regex(parsed)}\s*"
+        rf"(?:{ROAD_TYPE_PATTERN})\.?\s*,?\s*"
+        rf"{_number_regex(parsed.normalized_number)}",
+        flags=re.IGNORECASE,
+    )
+
+
+def _same_street_address_regex(parsed: ParsedAddress) -> re.Pattern[str]:
+    return re.compile(
+        rf"\b{_street_regex(parsed)}\s*"
+        rf"(?:(?:{ROAD_TYPE_PATTERN})\.?\s*,?\s*)?"
+        rf"(?P<number>\d+(?:\s*[a-zA-Z](?![{ESTONIAN_LETTER_PATTERN}]))?)",
+        flags=re.IGNORECASE,
+    )
+
+
+def address_matches_text(address: str, text: str) -> bool:
+    parsed = parse_detail_address(address)
+    return parsed is not None and _target_address_regex(parsed).search(text) is not None
+
+
+def _target_address_match(
+    parsed: ParsedAddress,
+    text: str,
+) -> re.Match[str] | None:
+    return _target_address_regex(parsed).search(text)
+
+
+def _same_street_numbers(parsed: ParsedAddress, text: str) -> list[str]:
+    return [
+        _normalize_address_number(match.group("number"))
+        for match in _same_street_address_regex(parsed).finditer(text)
+    ]
+
+
+def _has_target_address(parsed: ParsedAddress, text: str) -> bool:
+    return _target_address_match(parsed, text) is not None
+
+
+def _has_wrong_same_street_address(parsed: ParsedAddress, text: str) -> bool:
+    numbers = _same_street_numbers(parsed, text)
+    return any(number != parsed.normalized_number for number in numbers)
+
+
+def _line_has_multiple_values(field_key: str, line: str) -> bool:
+    if field_key == "taisehitus_pct":
+        return len(re.findall(r"\d+(?:[,.]\d+)?\s*%", line)) > 1
+    if field_key.endswith("_m2"):
+        return len(re.findall(r"\d[\d\s.,]*\s*m(?:2|²)\b", line)) > 1
+    return False
+
+
+def _has_other_address_like_text(text: str) -> bool:
+    typed_address = re.search(
+        rf"\b[{ESTONIAN_LETTER_PATTERN}][{ESTONIAN_LETTER_PATTERN}]+"
+        rf"\s+(?:{ROAD_TYPE_PATTERN})\.?\s+\d+\s*[a-zA-Z]?\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    bare_address = re.search(
+        rf"\b[{ESTONIAN_LETTER_PATTERN}][{ESTONIAN_LETTER_PATTERN}]+"
+        rf"\s+\d+\s*[a-zA-Z]?\s*[–-]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return bool(typed_address or bare_address)
+
+
 def parse_float(value: str) -> float:
     cleaned = value.replace("\xa0", " ")
     cleaned = re.sub(r"\s+", "", cleaned)
@@ -87,6 +244,14 @@ def parse_roof_pitch(value: str) -> str:
     cleaned = re.sub(r"\s*,\s*", " või ", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned)
     return cleaned.strip()
+
+
+def clean_building_height_value(value: Any) -> str:
+    cleaned = parse_text(str(value))
+    cleaned = re.split(r"\s*\(\s*abs\b", cleaned, maxsplit=1, flags=re.IGNORECASE)[0]
+    if re.fullmatch(r"\d+(?:[,.]\d+)?\s*m\b.*", cleaned, flags=re.IGNORECASE):
+        cleaned = re.sub(r"\s*m\b.*$", "", cleaned, flags=re.IGNORECASE).strip()
+    return cleaned or parse_text(str(value))
 
 
 def normalize_land_use_text(value: str) -> str:
@@ -187,11 +352,15 @@ def _candidate_from_match(
     spec: FieldSpec,
     regex: RegexPattern,
     match: re.Match,
+    target_address: ParsedAddress | None = None,
 ) -> RegexCandidate | None:
     raw = _raw_value(match)
     context = _context_for_match(chunk.text, match)
+    line = _line_for_match(chunk.text, match)
     try:
         value = spec.parser(raw) if spec.parser else parse_text(raw)
+        if spec.key == "hoonete_lubatud_korgused_m":
+            value = clean_building_height_value(value)
     except (TypeError, ValueError):
         logger.debug(
             f"Skipping regex candidate field={spec.key} pattern={regex.name} raw={raw}"
@@ -204,6 +373,40 @@ def _candidate_from_match(
         )
         return None
 
+    reasons = list(chunk.reasons)
+    if target_address is not None:
+        reasons.append("target_address_available")
+        candidate_text = " ".join([line, context])
+        if _has_target_address(target_address, candidate_text):
+            reasons.append("target_address_context")
+        if _has_wrong_same_street_address(target_address, line):
+            reasons.append("same_street_wrong_address")
+        elif _has_wrong_same_street_address(target_address, context) and not (
+            _has_target_address(target_address, line)
+        ):
+            reasons.append("context_wrong_address")
+        if _has_wrong_same_street_address(target_address, candidate_text):
+            reasons.append("multi_address_context")
+        if not _has_target_address(
+            target_address, candidate_text
+        ) and _has_other_address_like_text(line):
+            reasons.append("other_address_context")
+        if _line_has_multiple_values(spec.key, line):
+            reasons.append("multi_value_table_row")
+        if spec.key in {"katusekalle", "hoonete_arv"} and _normalize_address_number(
+            parse_text(raw)
+        ) in _same_street_numbers(target_address, line):
+            reasons.append("address_number_capture")
+        target_match = _target_address_match(target_address, line)
+        raw_index = line.find(str(raw))
+        if (
+            spec.key == "hoonete_arv"
+            and target_match is not None
+            and raw_index != -1
+            and raw_index < target_match.start()
+        ):
+            reasons.append("unscoped_before_target_address")
+
     return RegexCandidate(
         field_key=spec.key,
         label=spec.label,
@@ -215,9 +418,9 @@ def _candidate_from_match(
         evidence=Evidence(
             pdf=chunk.pdf_path.name,
             page=chunk.page,
-            text=_line_for_match(chunk.text, match),
+            text=line,
         ),
-        reasons=list(chunk.reasons),
+        reasons=reasons,
         context=context,
     )
 
@@ -299,7 +502,7 @@ FIELD_STRONG_CONTEXT_TERMS: dict[str, tuple[str, ...]] = {
         "tulepüsivusklassiks",
         "tulepüsivusklass",
         "tulepüsivusaste",
-        "planeeritud",
+        "tp-" "planeeritud",
     ),
 }
 
@@ -332,6 +535,45 @@ def _score_candidate(candidate: RegexCandidate) -> tuple[float, list[str], list[
     score = candidate.confidence * 100
     reasons = list(candidate.reasons)
     flags: list[str] = []
+
+    if "target_address_context" in candidate.reasons:
+        score += 18
+        reasons.append("boost:target_address")
+    if "targeted_address" in candidate.reasons:
+        score += 18
+        reasons.append("boost:targeted_address")
+    if "same_street_wrong_address" in candidate.reasons:
+        score -= 55
+        flags.append("same_street_wrong_address")
+    if "context_wrong_address" in candidate.reasons:
+        score -= 35
+        flags.append("context_wrong_address")
+    if "other_address_context" in candidate.reasons:
+        score -= 40
+        flags.append("other_address_context")
+    if "multi_address_context" in candidate.reasons:
+        score -= 6
+        flags.append("multi_address_context")
+    if "multi_value_table_row" in candidate.reasons:
+        if "targeted_address" in candidate.reasons:
+            flags.append("multi_value_targeted_context")
+        else:
+            score -= 45
+            flags.append("multi_value_unscoped")
+    if "address_number_capture" in candidate.reasons:
+        score -= 75
+        flags.append("address_number_capture")
+    if "unscoped_before_target_address" in candidate.reasons:
+        score -= 55
+        flags.append("unscoped_before_target_address")
+    if (
+        candidate.field_key == "katusekalle"
+        and "target_address_available" in candidate.reasons
+        and "target_address_context" not in candidate.reasons
+        and "targeted_address" not in candidate.reasons
+    ):
+        score -= 45
+        flags.append("unscoped_address_context")
 
     for term in STRONG_CONTEXT_TERMS:
         if term in low:
@@ -375,9 +617,24 @@ def _score_candidate(candidate: RegexCandidate) -> tuple[float, list[str], list[
         ):
             flags.append("not_building_height")
             score -= 35
+        raw_low = str(candidate.raw_value).lower()
+        if "rääst" in evidence_low and re.search(
+            rf"rääst\w*\s+kõrgus\w*\s*[-–]?\s*{re.escape(raw_low)}\s*m",
+            evidence_low,
+        ):
+            flags.append("eave_height")
+            score -= 35
         if not _has_amount_text(candidate.value):
             flags.append("missing_height_amount")
             score -= 30
+
+    if candidate.field_key == "krundi_pind_m2" and (
+        "vähemalt" in evidence_low
+        or "mahtuvate puude" in evidence_low
+        or "puurinde" in evidence_low
+    ):
+        flags.append("general_minimum_area_context")
+        score -= 45
 
     if "toc_downrank" in candidate.reasons:
         score -= 25
@@ -388,11 +645,20 @@ def _score_candidate(candidate: RegexCandidate) -> tuple[float, list[str], list[
 
 def _quality_for_score(score: float, flags: list[str]) -> str:
     blocking_flags = {
+        "address_number_capture",
+        "context_wrong_address",
+        "eave_height",
+        "general_minimum_area_context",
         "missing_floor_amount",
         "missing_height_amount",
+        "multi_value_unscoped",
         "not_building_height",
+        "other_address_context",
+        "same_street_wrong_address",
         "underground_floor_context",
         "toc_context",
+        "unscoped_before_target_address",
+        "unscoped_address_context",
     }
     if score >= 88 and not blocking_flags.intersection(flags):
         return "strong"
@@ -433,6 +699,11 @@ def _has_close_conflict(
     best_score = best.score or 0
     for candidate in candidates[1:]:
         if (candidate.score or 0) < best_score - 8:
+            continue
+        if (
+            "targeted_address" in best.reasons
+            and "targeted_address" not in candidate.reasons
+        ):
             continue
         if not _field_values_equivalent(spec.key, best, candidate):
             return True
@@ -635,12 +906,12 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         patterns=(
             RegexPattern(
                 "katuse_kalle",
-                r"\bkatuse\s*kalle\D{0,30}(?P<value>\d+\s*(?:[-–]\s*\d+)?\s*(?:[˚°])?(?:\s*(?:või|ja|/|,)\s*\d+\s*(?:[-–]\s*\d+)?\s*(?:[˚°])?)*)",
+                r"\bkatuse\s*kalle\D{0,30}(?P<value>\d+\s*(?:[-–]\s*\d+)?\s*(?:[oO˚°])?(?:\s*(?:või|ja|/|,)\s*\d+\s*(?:[-–]\s*\d+)?\s*(?:[oO˚°])?)*)",
                 0.95,
             ),
             RegexPattern(
                 "katusekalle",
-                r"\bkatusekalle\D{0,30}(?P<value>\d+\s*(?:[-–]\s*\d+)?\s*(?:[˚°])?(?:\s*(?:või|ja|/|,)\s*\d+\s*(?:[-–]\s*\d+)?\s*(?:[˚°])?)*)",
+                r"\bkatusekalle\D{0,30}(?P<value>\d+\s*(?:[-–]\s*\d+)?\s*(?:[oO˚°])?(?:\s*(?:või|ja|/|,)\s*\d+\s*(?:[-–]\s*\d+)?\s*(?:[oO˚°])?)*)",
                 0.95,
             ),
         ),
@@ -659,7 +930,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
             RegexPattern(
                 "tp_code",
                 r"\b(?P<value>TP\s*[-–]?\s*\d+)\b",
-                0.65,
+                0.9,
             ),
         ),
     ),
@@ -684,9 +955,315 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
 )
 
 
+NUMBER_TOKEN_PATTERN = r"\d+(?:[,.]\d+)?"
+
+
+def _candidate_context_around_line(lines: list[str], index: int) -> str:
+    start = max(0, index - 2)
+    end = min(len(lines), index + 4)
+    return "\n".join(lines[start:end]).strip()[:1200]
+
+
+def _manual_regex_candidate(
+    chunk: TextChunk,
+    spec: FieldSpec,
+    pattern_name: str,
+    raw: str,
+    evidence_text: str,
+    context: str,
+    confidence: float = 0.96,
+) -> RegexCandidate | None:
+    try:
+        value = spec.parser(raw) if spec.parser else parse_text(raw)
+        if spec.key == "hoonete_lubatud_korgused_m":
+            value = clean_building_height_value(value)
+    except (TypeError, ValueError):
+        return None
+    return RegexCandidate(
+        field_key=spec.key,
+        label=spec.label,
+        value=value,
+        raw_value=parse_text(raw),
+        unit=spec.unit,
+        confidence=confidence,
+        pattern_name=pattern_name,
+        evidence=Evidence(
+            pdf=chunk.pdf_path.name,
+            page=chunk.page,
+            text=evidence_text.strip()[:700],
+        ),
+        reasons=sorted(
+            set([*chunk.reasons, "target_address_context", "targeted_address"])
+        ),
+        context=context,
+    )
+
+
+def _address_row_numbers(
+    line: str,
+    target_address: ParsedAddress,
+) -> list[tuple[str, bool]]:
+    match = _target_address_match(target_address, line)
+    if match is None:
+        return []
+    tail = line[match.end() :]
+    return [
+        (
+            number_match.group(0),
+            "%" in tail[number_match.end() : number_match.end() + 2],
+        )
+        for number_match in re.finditer(NUMBER_TOKEN_PATTERN, tail)
+    ]
+
+
+def _table_row_target_candidates(
+    chunk: TextChunk,
+    spec: FieldSpec,
+    target_address: ParsedAddress,
+) -> list[RegexCandidate]:
+    candidates: list[RegexCandidate] = []
+    lines = chunk.text.splitlines()
+    for index, line in enumerate(lines):
+        numbers = _address_row_numbers(line, target_address)
+        if not numbers:
+            continue
+        low_line = line.lower()
+        if "katastri" in low_line or re.search(r"\d+:\d+:\d+", line):
+            continue
+        numeric_values = [_float_or_none(value) for value, _ in numbers]
+        table_like = (
+            len(numeric_values) >= 3
+            and numeric_values[0] is not None
+            and numeric_values[1] is not None
+            and numeric_values[0] > 100
+            and numeric_values[1] > 20
+        )
+        context = _candidate_context_around_line(lines, index)
+        raw: str | None = None
+        if spec.key == "krundi_pind_m2" and table_like:
+            raw = numbers[0][0]
+        elif spec.key == "ehitusalune_pind_m2" and table_like:
+            raw = numbers[1][0]
+        elif spec.key == "taisehitus_pct":
+            percent_values = [value for value, is_percent in numbers if is_percent]
+            if percent_values and "täisehitus" in low_line:
+                raw = percent_values[0]
+            elif table_like:
+                raw = numbers[2][0]
+        elif spec.key == "hoonete_arv":
+            if table_like and len(numbers) >= 5:
+                raw = numbers[4][0]
+        if raw is None:
+            continue
+        candidate = _manual_regex_candidate(
+            chunk,
+            spec,
+            "address_table_row",
+            raw,
+            line,
+            context,
+            confidence=0.97,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
+def _selected_address_windows(
+    chunk: TextChunk,
+    target_address: ParsedAddress,
+    max_chars: int = 900,
+) -> list[tuple[str, str]]:
+    windows: list[tuple[str, str]] = []
+    target_regex = _target_address_regex(target_address)
+    wrong_regex = _same_street_address_regex(target_address)
+    for match in target_regex.finditer(chunk.text):
+        line_start = chunk.text.rfind("\n", 0, match.start()) + 1
+        line_end = chunk.text.find("\n", match.end())
+        if line_end == -1:
+            line_end = len(chunk.text)
+        line = chunk.text[line_start:line_end]
+        line_low = line.lower()
+        if not any(
+            term in line_low
+            for term in (
+                "kinnistu",
+                "kinnistule",
+                "krunt",
+                "krundil",
+                "moodustatav",
+                "pos",
+                "hoonete",
+                "katuse",
+                "ehitusõigus",
+            )
+        ):
+            continue
+        line_prefix = chunk.text[line_start : match.start()]
+        if _has_wrong_same_street_address(target_address, line_prefix):
+            continue
+        end = min(len(chunk.text), match.start() + max_chars)
+        for other in wrong_regex.finditer(chunk.text, match.end(), end):
+            if (
+                _normalize_address_number(other.group("number"))
+                != target_address.normalized_number
+            ):
+                end = other.start()
+                break
+        window = chunk.text[match.start() : end].strip()
+        line = _line_for_offset(chunk.text, match.start())
+        if window:
+            windows.append((window, line))
+    return windows
+
+
+def _line_for_offset(text: str, offset: int) -> str:
+    start = text.rfind("\n", 0, offset) + 1
+    end = text.find("\n", offset)
+    if end == -1:
+        end = len(text)
+    return text[start:end].strip()[:700]
+
+
+def _first_match(pattern: str, text: str) -> str | None:
+    match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+    return match.group("value") if match else None
+
+
+def _building_count_from_noun_quantities(text: str) -> int | None:
+    total = 0
+    found = False
+    for match in re.finditer(
+        r"(?P<count>\d+)\s+(?P<type>elam\w*|abihoon\w*)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        count = int(match.group("count"))
+        if count > 20:
+            continue
+        total += count
+        found = True
+    if found:
+        return total
+    if re.search(r"\bühe\s+[^.]{0,80}\belam\w*", text, flags=re.IGNORECASE):
+        return 1
+    return None
+
+
+def _targeted_window_candidates(
+    chunk: TextChunk,
+    spec: FieldSpec,
+    target_address: ParsedAddress,
+) -> list[RegexCandidate]:
+    candidates: list[RegexCandidate] = []
+    for window, line in _selected_address_windows(chunk, target_address):
+        raw: str | None = None
+        pattern_name = "address_scoped_context"
+        if spec.key == "taisehitus_pct":
+            raw = _first_match(
+                rf"\btäisehitus(?:e\s*protsent|protsent)?\D{{0,90}}"
+                rf"(?P<value>{NUMBER_TOKEN_PATTERN})\s*%",
+                window,
+            )
+        elif spec.key == "ehitusalune_pind_m2":
+            raw = _first_match(
+                r"\b(?:ehitisealune|ehitusalune|hoonete\s+suurim\s+lubatud\s+ehitusalune)"
+                r"\s+pind(?:ala)?\D{0,90}(?P<value>\d[\d\s.,]*)\s*m(?:2|²)\b",
+                window,
+            )
+        elif spec.key == "hoonete_lubatud_korgused_m":
+            raw = _first_match(
+                rf"\b(?:maksimaalne\s+hoonestuse\s+kõrgus|"
+                rf"lubatud\s+suurim\s+(?:katuseharja\s+)?kõrgus|"
+                rf"maksimaalseks\s+kõrguseks)"
+                rf"\D{{0,120}}(?P<value>{NUMBER_TOKEN_PATTERN})\s*m\b",
+                window,
+            )
+        elif spec.key == "katusekalle":
+            if "katuse" in window.lower() or "katuse" in line.lower():
+                pitch = re.search(
+                    r"\bkatuse\s*kalle|\bkatusekalle",
+                    window,
+                    flags=re.IGNORECASE,
+                )
+                if pitch is not None:
+                    pitch_value = re.search(
+                        rf"(?P<value>{NUMBER_TOKEN_PATTERN}\s*[˚°]?\s*[-–]\s*"
+                        rf"{NUMBER_TOKEN_PATTERN}\s*[˚°]?)",
+                        window[pitch.end() : pitch.end() + 180],
+                        flags=re.IGNORECASE,
+                    )
+                    raw = pitch_value.group("value") if pitch_value else None
+                if raw is None and "katuse" in line.lower():
+                    address_match = _target_address_match(target_address, line)
+                    if address_match is not None:
+                        pitch_value = re.search(
+                            rf"(?P<value>{NUMBER_TOKEN_PATTERN}\s*[˚°]?\s*[-–]\s*"
+                            rf"{NUMBER_TOKEN_PATTERN}\s*[˚°]?)",
+                            line[address_match.end() : address_match.end() + 120],
+                            flags=re.IGNORECASE,
+                        )
+                        raw = pitch_value.group("value") if pitch_value else None
+        elif spec.key == "hoonete_arv":
+            if "hoonete arv" in line.lower() or "hoonete arv" in window.lower():
+                scoped = re.search(
+                    r"\bkrundil\b\D{0,12}(?P<value>\d+)\b",
+                    window,
+                    flags=re.IGNORECASE,
+                )
+                if scoped is not None:
+                    raw = scoped.group("value")
+            if raw is None:
+                count = _building_count_from_noun_quantities(window)
+                if count is not None:
+                    raw = str(count)
+                    pattern_name = "address_scoped_building_nouns"
+
+        if raw is None:
+            continue
+        evidence = line if line else window.splitlines()[0]
+        candidate = _manual_regex_candidate(
+            chunk,
+            spec,
+            pattern_name,
+            raw,
+            evidence,
+            window,
+            confidence=0.97,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
+def _targeted_field_candidates(
+    chunks: list[TextChunk],
+    spec: FieldSpec,
+    target_address: ParsedAddress,
+) -> list[RegexCandidate]:
+    if spec.key not in {
+        "krundi_pind_m2",
+        "taisehitus_pct",
+        "ehitusalune_pind_m2",
+        "hoonete_lubatud_korgused_m",
+        "hoonete_arv",
+        "katusekalle",
+    }:
+        return []
+
+    candidates: list[RegexCandidate] = []
+    for chunk in chunks:
+        if chunk.field_key is not None and chunk.field_key != spec.key:
+            continue
+        candidates.extend(_table_row_target_candidates(chunk, spec, target_address))
+        candidates.extend(_targeted_window_candidates(chunk, spec, target_address))
+    return candidates
+
+
 def extract_field_candidates(
     chunks: list[TextChunk],
     spec: FieldSpec,
+    target_address: ParsedAddress | None = None,
 ) -> list[RegexCandidate]:
     candidates: list[RegexCandidate] = []
     for chunk in chunks:
@@ -698,9 +1275,17 @@ def extract_field_candidates(
                 chunk.text,
                 flags=re.IGNORECASE | re.MULTILINE,
             ):
-                candidate = _candidate_from_match(chunk, spec, regex, match)
+                candidate = _candidate_from_match(
+                    chunk,
+                    spec,
+                    regex,
+                    match,
+                    target_address=target_address,
+                )
                 if candidate is not None:
                     candidates.append(candidate)
+    if target_address is not None:
+        candidates.extend(_targeted_field_candidates(chunks, spec, target_address))
 
     ranked = _rank_candidates(candidates)
     deduped: dict[tuple[str | None, int | None, str], RegexCandidate] = {}
@@ -760,19 +1345,6 @@ def extracted_field_from_candidates(
         evidence=best.evidence,
         candidates=ranked,
     )
-
-
-PARCEL_CONTEXT_KEYS = (
-    "tunnus",
-    "pindala",
-    "siht1",
-    "siht2",
-    "siht3",
-    "so_prts1",
-    "so_prts2",
-    "so_prts3",
-    "omvorm",
-)
 
 
 def compact_parcel_context(parcel_attributes: dict[str, Any] | None) -> dict[str, Any]:
@@ -930,16 +1502,6 @@ def _cadastre_land_use(parcel_context: dict[str, Any]) -> str | None:
             value = f"{value} {_format_number(pct)}%"
         parts.append(value)
     return ", ".join(parts) if parts else None
-
-
-def _land_use_terms(value: Any) -> set[str]:
-    return {
-        match.group(0)
-        for match in re.finditer(
-            r"[a-zõäöü]+maa|eramu|elamu|äri|tootmis|ühiskond",
-            str(value).lower(),
-        )
-    }
 
 
 def _cadastre_land_use_candidate(
@@ -1237,6 +1799,7 @@ def extract_building_rights(
     chunks: list[TextChunk],
     field_specs: tuple[FieldSpec, ...] = FIELD_SPECS,
     parcel_attributes: dict[str, Any] | None = None,
+    target_address: str | None = None,
 ) -> BuildingRightSection:
     logger.debug(
         f"Running regex building-right extraction chunks={len(chunks)} "
@@ -1245,10 +1808,17 @@ def extract_building_rights(
     fields: dict[str, ExtractedField] = {}
     reviews: list[ReviewItem] = []
     parcel_context = compact_parcel_context(parcel_attributes)
+    parsed_target_address = (
+        parse_detail_address(target_address) if target_address else None
+    )
     for spec in field_specs:
         field = _context_backed_field(spec, parcel_context)
         if field is None:
-            candidates = extract_field_candidates(chunks, spec)
+            candidates = extract_field_candidates(
+                chunks,
+                spec,
+                target_address=parsed_target_address,
+            )
             field = extracted_field_from_candidates(spec, candidates)
         fields[spec.key] = field
         reviews.extend(field.needs_review)
