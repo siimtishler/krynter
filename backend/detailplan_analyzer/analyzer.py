@@ -5,7 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from backend.core.config import config
 from backend.core.logging import logger
+from backend.detailplan_analyzer.llm_resolver import (
+    LLMResolverProvider,
+    OllamaResolverProvider,
+    resolve_building_rights,
+)
 from backend.core.utils import time_function
 from backend.detailplan_analyzer.extraction import (
     PageText,
@@ -69,6 +75,40 @@ def _status_for(
     return AnalysisStatus.OK
 
 
+def _llm_resolver_enabled(enable_llm_resolver) -> bool:
+    if enable_llm_resolver is not None:
+        return enable_llm_resolver
+    return config.detail_plan_llm_resolver_enabled
+
+
+def _maybe_resolve_with_llm(
+    building_right: BuildingRightSection,
+    parcel_context: dict[str, Any],
+    setup_issues: list[str],
+    chunks: list[TextChunk],
+    llm_provider: LLMResolverProvider | None,
+    enable_llm_resolver: bool | None = None,
+) -> None:
+    if not _llm_resolver_enabled(enable_llm_resolver):
+        return
+    if setup_issues or not chunks:
+        logger.info(
+            "Skipping LLM resolver because setup issues or no chunks are present"
+        )
+        return
+
+    provider = llm_provider or OllamaResolverProvider(
+        base_url=config.ollama_base_url,
+        model=config.ollama_building_right_model,
+        timeout_s=config.ollama_timeout_s,
+    )
+    resolve_building_rights(
+        building_right,
+        parcel_context=parcel_context,
+        provider=provider,
+    )
+
+
 @time_function
 def analyze_pdfs(
     pdf_paths: list[Path],
@@ -77,6 +117,8 @@ def analyze_pdfs(
     parcel_attributes: dict[str, Any] | None = None,
     cache_dir: Path | None = None,
     force_refresh: bool = False,
+    enable_llm_resolver: bool | None = None,
+    llm_provider: LLMResolverProvider | None = None,
 ) -> DetailPlanAnalysisResponse:
     detail_plan = detail_plan or {}
     detail_plan_id = (
@@ -150,9 +192,18 @@ def analyze_pdfs(
     building_right = extract_building_rights(
         chunks,
         parcel_attributes=parcel_attributes,
+        target_address=address,
     )
     if not chunks:
         setup_issues.append("PDFidest ei leitud regex-analüüsiks sobivaid tekstilehti.")
+    _maybe_resolve_with_llm(
+        building_right=building_right,
+        parcel_context=meta.parcel_context,
+        setup_issues=setup_issues,
+        chunks=chunks,
+        llm_provider=llm_provider,
+        enable_llm_resolver=enable_llm_resolver,
+    )
 
     response = DetailPlanAnalysisResponse(
         status=_status_for(building_right, setup_issues),
@@ -176,6 +227,8 @@ def analyze_detail_plan(
     address: str,
     parcel_attributes: dict[str, Any] | None = None,
     force_refresh: bool = False,
+    enable_llm_resolver: bool | None = None,
+    llm_provider: LLMResolverProvider | None = None,
 ) -> DetailPlanAnalysisResponse:
     plan_dir = detail_plan_cache_dir(detail_plan)
     detail_plan_id = (
@@ -210,6 +263,8 @@ def analyze_detail_plan(
         parcel_attributes=parcel_attributes,
         cache_dir=plan_dir,
         force_refresh=force_refresh,
+        enable_llm_resolver=enable_llm_resolver,
+        llm_provider=llm_provider,
     )
 
 
@@ -239,6 +294,8 @@ def analyze_parcel_detail_plan(
     parcel,
     address: str,
     force_refresh: bool = False,
+    enable_llm_resolver: bool | None = None,
+    llm_provider: LLMResolverProvider | None = None,
 ) -> DetailPlanAnalysisResponse:
     detail_plan = highest_overlap_detail_plan(parcel)
     if detail_plan is None:
@@ -254,6 +311,8 @@ def analyze_parcel_detail_plan(
         address,
         parcel_attributes=parcel.attributes(),
         force_refresh=force_refresh,
+        enable_llm_resolver=enable_llm_resolver,
+        llm_provider=llm_provider,
     )
 
 

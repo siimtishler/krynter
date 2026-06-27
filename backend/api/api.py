@@ -51,10 +51,11 @@ def return_detail_plan_analysis(
     type: str,
     searchable: str,
     force_refresh: bool = False,
+    enable_llm_resolver: bool | None = True,
 ):
     logger.info(
         f"detail-plan-analysis request type={type} searchable={searchable} "
-        f"force_refresh={force_refresh}"
+        f"force_refresh={force_refresh} enable_llm_resolver={enable_llm_resolver}"
     )
     if type == "address":
         parcel: Parcel | None = find_parcel_by_address(address=searchable)
@@ -72,12 +73,15 @@ def return_detail_plan_analysis(
     if detail_plan is None:
         raise HTTPException(status_code=404, detail="Detail plan not found")
 
-    result = analyze_detail_plan(
-        detail_plan=detail_plan,
-        address=address,
-        parcel_attributes=parcel_attributes,
-        force_refresh=force_refresh,
-    )
+    analyze_kwargs = {
+        "detail_plan": detail_plan,
+        "address": address,
+        "parcel_attributes": parcel_attributes,
+        "force_refresh": force_refresh,
+    }
+    if enable_llm_resolver is not None:
+        analyze_kwargs["enable_llm_resolver"] = enable_llm_resolver
+    result = analyze_detail_plan(**analyze_kwargs)
     logger.info(
         f"detail-plan-analysis response status={result.status} "
         f"chunks={result.meta.chunks_sent} setup_issues={result.setup_issues}"

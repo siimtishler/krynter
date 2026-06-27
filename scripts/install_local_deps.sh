@@ -2,7 +2,7 @@
 set -euo pipefail
 
 INSTALL_OLLAMA=false
-OLLAMA_MODEL="${OLLAMA_MODEL:-qwen3:8b}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-gemma3:4b}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -19,10 +19,10 @@ Install local development dependencies for Krünter.
 Usage:
   scripts/install_local_deps.sh
   scripts/install_local_deps.sh --with-ollama
-  scripts/install_local_deps.sh --with-ollama --model=qwen3:14b
+  scripts/install_local_deps.sh --with-ollama --model=qwen3:8b
 
 Environment:
-  OLLAMA_MODEL=qwen3:8b  Default model pulled when --with-ollama is used.
+  OLLAMA_MODEL=gemma3:4b  Default model pulled when --with-ollama is used.
 USAGE
       exit 0
       ;;

@@ -6,3 +6,6 @@ format fmt:
 # TODO: Add tests for frontend
 test:
 	poetry run pytest backend/tests -v
+
+integration test-integration:
+	KRUNTER_RUN_INTEGRATION=1 poetry run pytest -m integration backend/tests/test_detailplan_golden.py
