@@ -3,13 +3,16 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './styles.css'
 
 import { API_BASE_URL } from '../api/client.js'
-import { throttle } from '../utils/utils.js';
 
 const KERESE_CENTER = [24.709819, 59.3795179]
-const KERESE_BOUNDS = [24.7020503, 59.3770407, 24.7175878, 59.3819951]
 const DETAIL_PLAN_SOURCE_ID = 'detail-plans'
 const DETAIL_PLAN_FILL_LAYER_ID = 'detail-plan-fill'
 const DETAIL_PLAN_LINE_LAYER_ID = 'detail-plan-line'
+const POI_SOURCE_ID = 'nearby-pois'
+const POI_CIRCLE_LAYER_ID = 'nearby-pois-circle'
+const POI_LABEL_LAYER_ID = 'nearby-pois-label'
+
+let poiPopup = null
 
 function addMapEvents(map, options) {
     let hoveredTunnus = null
@@ -32,9 +35,7 @@ function addMapEvents(map, options) {
         map.setFilter('parcel-fill-hover', ['==', ['get', 'tunnus'], tunnus])
     }
 
-    const updateParcelHover = throttle(handleParcelHover, 50)
-
-    map.on("mousemove", "parcel-fill", updateParcelHover)
+    map.on("mousemove", "parcel-fill", handleParcelHover)
 
     map.on("mouseleave", "parcel-fill", () => {
         hoveredTunnus = null
@@ -61,6 +62,15 @@ function setLayerVisibility(map, layerIds, visible) {
             map.setLayoutProperty(layerId, 'visibility', visibility)
         }
     }
+}
+
+function runWhenMapReady(map, callback) {
+    if (map.loaded()) {
+        callback()
+        return
+    }
+
+    map.once('load', callback)
 }
 
 function ensureDetailPlanLayers(map) {
@@ -160,6 +170,120 @@ function createDetailPlanToggleControl(map) {
     }
 }
 
+function ensurePoiLayers(map) {
+    if (!map.getSource(POI_SOURCE_ID)) {
+        map.addSource(POI_SOURCE_ID, {
+            type: 'geojson',
+            data: {
+                type: 'FeatureCollection',
+                features: [],
+            },
+        })
+    }
+
+    if (!map.getLayer(POI_CIRCLE_LAYER_ID)) {
+        map.addLayer({
+            id: POI_CIRCLE_LAYER_ID,
+            type: 'circle',
+            source: POI_SOURCE_ID,
+            paint: {
+                'circle-color': ['coalesce', ['get', 'color'], '#2563eb'],
+                'circle-radius': [
+                    'interpolate',
+                    ['linear'],
+                    ['zoom'],
+                    11,
+                    5,
+                    15,
+                    8,
+                ],
+                'circle-stroke-color': '#ffffff',
+                'circle-stroke-width': 2,
+                'circle-opacity': 0.92,
+            },
+        })
+    }
+
+    if (!map.getLayer(POI_LABEL_LAYER_ID)) {
+        map.addLayer({
+            id: POI_LABEL_LAYER_ID,
+            type: 'symbol',
+            source: POI_SOURCE_ID,
+            minzoom: 14,
+            layout: {
+                'text-field': ['get', 'name'],
+                'text-size': 11,
+                'text-offset': [0, 1.25],
+                'text-anchor': 'top',
+                'text-max-width': 12,
+                'text-optional': true,
+            },
+            paint: {
+                'text-color': '#111827',
+                'text-halo-color': '#ffffff',
+                'text-halo-width': 1.5,
+            },
+        })
+    }
+}
+
+function addPoiEvents(map) {
+    map.on('mouseenter', POI_CIRCLE_LAYER_ID, () => {
+        map.getCanvas().style.cursor = 'pointer'
+    })
+
+    map.on('mousemove', POI_CIRCLE_LAYER_ID, (event) => {
+        const feature = event.features?.[0]
+        const coordinates = feature?.geometry?.coordinates
+
+        if (!feature || !Array.isArray(coordinates)) {
+            return
+        }
+
+        const name = feature.properties?.name || 'Lähedal asuv objekt'
+        const address = feature.properties?.address
+        const categoryLabel = feature.properties?.categoryLabel
+
+        const popupBody = document.createElement('div')
+        popupBody.className = 'poi-popup'
+
+        const title = document.createElement('strong')
+        title.textContent = name
+        popupBody.appendChild(title)
+
+        if (address) {
+            const addressElement = document.createElement('span')
+            addressElement.textContent = address
+            popupBody.appendChild(addressElement)
+        }
+
+        if (categoryLabel) {
+            const categoryElement = document.createElement('small')
+            categoryElement.textContent = categoryLabel
+            popupBody.appendChild(categoryElement)
+        }
+
+        if (!poiPopup) {
+            poiPopup = new maplibregl.Popup({
+                closeButton: false,
+                closeOnClick: false,
+                offset: 14,
+                className: 'poi-map-popup',
+            })
+        }
+
+        poiPopup
+            .setLngLat(coordinates)
+            .setDOMContent(popupBody)
+            .addTo(map)
+    })
+
+    map.on('mouseleave', POI_CIRCLE_LAYER_ID, () => {
+        map.getCanvas().style.cursor = ''
+        poiPopup?.remove()
+    })
+}
+
 function addParcelLayers(map) {
     map.addSource("tallinn_parcels", {
         type: "vector",
@@ -221,12 +345,32 @@ export function createMap(id, options = {}) {
     map.on("load", () => {
         addParcelLayers(map)
         addMapEvents(map, options)
+        ensurePoiLayers(map)
+        addPoiEvents(map)
         map.addControl(createDetailPlanToggleControl(map), 'top-left')
     })
 
     return map
 }
 
-export function addGeoJsonLayerToMap(result_geojson, map) {
+export function setPoiOverlay(map, featureCollection) {
+    runWhenMapReady(map, () => {
+        ensurePoiLayers(map)
+        const source = map.getSource(POI_SOURCE_ID)
+        if (source) {
+            source.setData(featureCollection)
+        }
+    })
+}
 
+export function clearPoiOverlay(map) {
+    setPoiOverlay(map, {
+        type: 'FeatureCollection',
+        features: [],
+    })
+    poiPopup?.remove()
+}
+
+export function addGeoJsonLayerToMap(result_geojson, map) {
+    setPoiOverlay(map, result_geojson)
 }
