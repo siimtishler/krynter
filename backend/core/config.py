@@ -10,6 +10,10 @@ class Config(BaseSettings):
     frontend_crs: str = "EPSG:4326"
     data_crs: str = "EPSG:3301"
     app_debug: bool = True
+    detail_plan_llm_resolver_enabled: bool = True
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_building_right_model: str = "gemma3:4b"
+    ollama_timeout_s: float = 600
     cadastre_vector_file: Path = DATA_DIR / "tallinn_parcels"
     poi_file: Path = DATA_DIR / "Tallinn_POIS2.gpkg"
     cadastre_file: Path = DATA_DIR / "Tallinn_KATASTER_GPKG2.gpkg"

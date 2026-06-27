@@ -20,6 +20,13 @@ from backend.detailplan_analyzer.models import (
     AnalysisStatus,
     DetailPlanAnalysisResponse,
     DetailPlanMeta,
+    SourceType,
+)
+from backend.detailplan_analyzer.llm_resolver import (
+    LLMFieldResolution,
+    LLMResolverDecision,
+    OllamaResolverProvider,
+    apply_resolution,
 )
 from backend.detailplan_analyzer.pdfs import (
     OCRRuntime,
@@ -510,8 +517,21 @@ def test_analyze_pdfs_returns_direct_regex_response(monkeypatch, tmp_path):
         "extract_pages_cached",
         lambda working_pdf, force_refresh=False: [page],
     )
+    monkeypatch.setattr(
+        analyzer.config,
+        "detail_plan_llm_resolver_enabled",
+        False,
+    )
 
-    response = analyzer.analyze_pdfs([pdf_path], "Kaupmehe tn 19")
+    class FailingProvider:
+        def resolve_field(self, request):
+            raise AssertionError("LLM resolver should not be called by default")
+
+    response = analyzer.analyze_pdfs(
+        [pdf_path],
+        "Kaupmehe tn 19",
+        llm_provider=FailingProvider(),
+    )
 
     assert response.building_right.fields["krundi_pind_m2"].value == 1000
     assert response.building_right.fields["taisehitus_pct"].value == 25
@@ -524,6 +544,333 @@ def test_analyze_pdfs_returns_direct_regex_response(monkeypatch, tmp_path):
     assert candidate_dump["context"]
     assert "llm_status" not in response.meta.model_dump()
     assert "analysis_id" not in response.meta.model_dump()
+
+
+def test_enabled_llm_resolver_applies_accepted_candidate(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "plan.pdf"
+    page = PageText(
+        pdf_path=pdf_path,
+        page=2,
+        text=(
+            "Kaupmehe tn 19 detailplaneering\n"
+            "Krundi pind 1000 m2\n"
+            "Täisehitus 25%\n"
+            "Täisehitus 30%\n"
+        ),
+        normalized_text=(
+            "Kaupmehe tn 19 detailplaneering\n"
+            "Krundi pind 1000 m2\n"
+            "Täisehitus 25%\n"
+            "Täisehitus 30%\n"
+        ),
+    )
+
+    monkeypatch.setattr(analyzer, "check_ocr_runtime", lambda: OCRRuntime([], set()))
+    monkeypatch.setattr(
+        analyzer,
+        "prepare_pdf_for_text",
+        lambda raw_pdf, runtime=None, force_refresh=False: (raw_pdf, False),
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "extract_pages_cached",
+        lambda working_pdf, force_refresh=False: [page],
+    )
+
+    class FakeProvider:
+        def __init__(self):
+            self.calls = []
+
+        def resolve_field(self, request):
+            self.calls.append(request)
+            if request.field_key != "taisehitus_pct":
+                return LLMFieldResolution(
+                    field_key=request.field_key,
+                    decision=LLMResolverDecision.NO_ANSWER,
+                    confidence=0.0,
+                    reason="No supplied evidence.",
+                )
+            return LLMFieldResolution(
+                field_key="taisehitus_pct",
+                decision=LLMResolverDecision.ACCEPTED_CANDIDATE,
+                value=request.candidates[0].value,
+                unit="%",
+                confidence=0.91,
+                evidence=request.candidates[0].evidence,
+                candidate_rank=request.candidates[0].rank,
+                reason="Top candidate is the applicable parcel value.",
+            )
+
+    provider = FakeProvider()
+
+    response = analyzer.analyze_pdfs(
+        [pdf_path],
+        "Kaupmehe tn 19",
+        enable_llm_resolver=True,
+        llm_provider=provider,
+    )
+
+    field = response.building_right.fields["taisehitus_pct"]
+    assert field.value == 25
+    assert field.source_type == SourceType.LLM
+    assert field.evidence == field.candidates[0].evidence
+    assert field.needs_review == []
+    assert field.candidates[-1].source_type == SourceType.LLM
+    assert field.candidates[-1].pattern_name == "llm_accepted_candidate"
+    assert "krundi_pind_m2" not in {call.field_key for call in provider.calls}
+    assert not any(
+        review.key == "taisehitus_pct"
+        for review in response.building_right.needs_review
+    )
+
+
+def test_llm_resolver_skips_parcel_backed_land_use_and_ownership(
+    monkeypatch,
+    tmp_path,
+):
+    pdf_path = tmp_path / "plan.pdf"
+    page = PageText(
+        pdf_path=pdf_path,
+        page=1,
+        text="Täisehitus 25%\nTäisehitus 30%\n",
+        normalized_text="Täisehitus 25%\nTäisehitus 30%\n",
+    )
+
+    monkeypatch.setattr(analyzer, "check_ocr_runtime", lambda: OCRRuntime([], set()))
+    monkeypatch.setattr(
+        analyzer,
+        "prepare_pdf_for_text",
+        lambda raw_pdf, runtime=None, force_refresh=False: (raw_pdf, False),
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "extract_pages_cached",
+        lambda working_pdf, force_refresh=False: [page],
+    )
+
+    class RecordingProvider:
+        def __init__(self):
+            self.field_keys = []
+
+        def resolve_field(self, request):
+            self.field_keys.append(request.field_key)
+            return LLMFieldResolution(
+                field_key=request.field_key,
+                decision=LLMResolverDecision.NO_ANSWER,
+                confidence=0.0,
+            )
+
+    provider = RecordingProvider()
+
+    response = analyzer.analyze_pdfs(
+        [pdf_path],
+        "Kaupmehe tn 19",
+        parcel_attributes={
+            "siht1": "ELAMUMAA",
+            "so_prts1": 100,
+            "omvorm": "Eraomand",
+        },
+        enable_llm_resolver=True,
+        llm_provider=provider,
+    )
+
+    assert "kasutusotstarve" not in provider.field_keys
+    assert "omandivorm" not in provider.field_keys
+    assert response.building_right.fields["kasutusotstarve"].source_type == "cadastre"
+    assert response.building_right.fields["omandivorm"].source_type == "cadastre"
+
+
+def test_invalid_llm_resolution_leaves_regex_field_unchanged(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=1,
+        text="Täisehitus 25%\nTäisehitus 30%\n",
+        score=10,
+        reasons=["test"],
+    )
+    field = extract_building_rights([chunk]).fields["taisehitus_pct"]
+
+    assert field.value is None
+    assert field.needs_review
+
+    assert not apply_resolution(
+        field,
+        LLMFieldResolution(
+            field_key="krundi_pind_m2",
+            decision=LLMResolverDecision.ACCEPTED_CANDIDATE,
+            value=25,
+            unit="%",
+            confidence=0.9,
+            candidate_rank=1,
+        ),
+    )
+    assert field.value is None
+    assert field.source_type is None
+    assert field.needs_review
+
+    assert not apply_resolution(
+        field,
+        LLMFieldResolution(
+            field_key="taisehitus_pct",
+            decision=LLMResolverDecision.CORRECTED_CANDIDATE,
+            value=25,
+            unit="%",
+            confidence=0.9,
+            evidence={
+                "pdf": "other.pdf",
+                "page": 99,
+                "text": "Unsupported evidence",
+            },
+        ),
+    )
+    assert field.value is None
+    assert field.source_type is None
+    assert field.needs_review
+
+    assert not apply_resolution(
+        field,
+        LLMFieldResolution(
+            field_key="taisehitus_pct",
+            decision=LLMResolverDecision.ACCEPTED_CANDIDATE,
+            value=25,
+            unit="%",
+            confidence=0.4,
+            candidate_rank=1,
+        ),
+    )
+    assert field.value is None
+    assert field.source_type is None
+    assert field.needs_review
+
+
+def test_llm_resolution_rejects_non_building_height_candidate(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=14,
+        text=(
+            "Lubatud koormus kinnistes metall-ladudes kõrgusega 12 m: "
+            "4 kuni 6 tn/m2.\n"
+        ),
+        score=10,
+        reasons=["test"],
+    )
+    field = extract_building_rights([chunk]).fields["hoonete_lubatud_korgused_m"]
+
+    assert field.value is None
+    assert field.candidates
+
+    assert not apply_resolution(
+        field,
+        LLMFieldResolution(
+            field_key="hoonete_lubatud_korgused_m",
+            decision=LLMResolverDecision.ACCEPTED_CANDIDATE,
+            value="12",
+            unit="m",
+            confidence=0.9,
+            candidate_rank=field.candidates[0].rank,
+        ),
+    )
+    assert field.value is None
+    assert field.source_type is None
+    assert field.needs_review
+
+
+def test_detail_plan_analysis_api_passes_explicit_llm_flag(monkeypatch):
+    captured: dict = {}
+    parcel = Parcel(
+        gpd.GeoDataFrame(
+            [{"l_aadress": "Kaupmehe tn 19", "geometry": Point(0, 0)}],
+            crs="EPSG:3301",
+        )
+    )
+    expected = DetailPlanAnalysisResponse(
+        status=AnalysisStatus.PARTIAL,
+        meta=DetailPlanMeta(address="Kaupmehe tn 19"),
+        building_right=analyzer.empty_building_right(),
+    )
+
+    monkeypatch.setattr(api, "find_parcel_by_address", lambda address: parcel)
+    monkeypatch.setattr(
+        api,
+        "highest_overlap_detail_plan",
+        lambda parcel: {"sysid": "1", "failid": "https://example.test/files"},
+    )
+
+    def fake_analyze_detail_plan(
+        detail_plan,
+        address,
+        parcel_attributes=None,
+        force_refresh=False,
+        enable_llm_resolver=None,
+    ):
+        captured["enable_llm_resolver"] = enable_llm_resolver
+        return expected
+
+    monkeypatch.setattr(api, "analyze_detail_plan", fake_analyze_detail_plan)
+
+    response = api.return_detail_plan_analysis(
+        type="address",
+        searchable="Kaupmehe tn 19",
+        enable_llm_resolver=True,
+    )
+
+    assert response["status"] == "partial"
+    assert captured["enable_llm_resolver"] is True
+
+
+def test_ollama_provider_parses_json_response(monkeypatch):
+    captured: dict = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "response": (
+                    '{"field_key":"taisehitus_pct",'
+                    '"decision":"accepted_candidate",'
+                    '"value":25,'
+                    '"unit":"%",'
+                    '"confidence":0.88,'
+                    '"source_type":"llm",'
+                    '"candidate_rank":1,'
+                    '"reason":"Selected from evidence."}'
+                )
+            }
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        "backend.detailplan_analyzer.llm_resolver.httpx.post", fake_post
+    )
+
+    provider = OllamaResolverProvider(
+        base_url="http://ollama.test",
+        model="qwen3:8b",
+        timeout_s=12,
+    )
+    resolution = provider.resolve_field(
+        request=provider_request("taisehitus_pct", "Täisehitus", "%")
+    )
+
+    assert captured["url"] == "http://ollama.test/api/generate"
+    assert captured["json"]["model"] == "qwen3:8b"
+    assert captured["json"]["format"] == "json"
+    assert captured["timeout"] == 12
+    assert resolution.field_key == "taisehitus_pct"
+    assert resolution.decision == LLMResolverDecision.ACCEPTED_CANDIDATE
+    assert resolution.source_type == SourceType.LLM
+
+
+def provider_request(field_key: str, label: str, unit: str | None):
+    from backend.detailplan_analyzer.llm_resolver import LLMFieldRequest
+
+    return LLMFieldRequest(field_key=field_key, label=label, unit=unit)
 
 
 def test_detail_plan_analysis_api_uses_highest_overlap_and_returns_json(monkeypatch):

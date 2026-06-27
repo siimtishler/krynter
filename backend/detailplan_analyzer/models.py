@@ -20,6 +20,7 @@ class SourceType(StrEnum):
     PDF = "pdf"
     CADASTRE = "cadastre"
     DERIVED = "derived"
+    LLM = "llm"
 
 
 class Evidence(BaseModel):
