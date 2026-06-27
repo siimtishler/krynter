@@ -1,12 +1,28 @@
 import './styles.css'
 import { analyzeDetailPlan, searchForParcel } from "./api/parcels.js"
-import { getRequiredElement } from "./utils/utils.js"
-import { clearPoiOverlay, createMap, setPoiOverlay } from "./map/map.js"
+import { getRequiredElement, classifyParcelSearchInput } from "./utils/utils.js"
+import {
+    clearNoiseOverlay,
+    clearPoiOverlay,
+    createMap,
+    focusPoiOnMap,
+    getAddressSuggestions,
+    setNoiseOverlay,
+    setPoiOverlay,
+} from "./map/map.js"
+
+const SHOW_DEBUG_HTML = import.meta.env.VITE_SHOW_DEBUG_HTML === 'true'
 
 const searchForm = getRequiredElement('search-bar', HTMLFormElement)
 const searchButton = getRequiredElement('search-button', HTMLButtonElement)
 const searchInput = getRequiredElement('search-input', HTMLInputElement)
+const searchSuggestions = getRequiredElement('search-suggestions', HTMLDataListElement)
+const searchSuggestionHint = getRequiredElement('search-suggestion-hint', HTMLButtonElement)
 const resultsPanel = getRequiredElement('results-panel', HTMLElement)
+
+if (SHOW_DEBUG_HTML) {
+    document.body.classList.add('debug-enabled')
+}
 
 const POI_COLORS = [
     '#2563eb',
@@ -24,15 +40,22 @@ const DETAIL_FIELD_ORDER = [
     'taisehitus_pct',
     'ehitusalune_pind_m2',
     'brutopind_m2',
-    'hoonete_arv',
     'korruselisus',
     'hoonete_lubatud_korgused_m',
-    'kasutusotstarve',
-    'omandivorm',
 ]
 
+const HIDDEN_BUILDING_FIELD_KEYS = new Set([
+    'hoonete_arv',
+    'kasutusotstarve',
+    'omandivorm',
+])
+
 let currentPoiCollection = emptyFeatureCollection()
+let currentPoiFeaturesByKey = new Map()
+let currentNoiseGeoJson = null
 let poiOverlayVisible = false
+let noiseOverlayVisible = false
+let closestAddressSuggestion = ''
 
 function emptyFeatureCollection() {
     return {
@@ -55,6 +78,14 @@ function createElement(tagName, className, text) {
 function appendText(parent, tagName, text, className) {
     const element = createElement(tagName, className, text)
     parent.appendChild(element)
+    return element
+}
+
+function markDebug(element) {
+    element.setAttribute('debug', '')
+    if (!SHOW_DEBUG_HTML) {
+        element.classList.add('debug-hidden')
+    }
     return element
 }
 
@@ -117,6 +148,21 @@ function formatDate(value) {
     }).format(date)
 }
 
+function formatUnit(unit) {
+    if (!unit) {
+        return ''
+    }
+
+    const normalized = String(unit).trim().toLowerCase()
+    if (['m2', 'm²', 'sqm'].includes(normalized)) {
+        return 'm²'
+    }
+    if (['degree', 'degrees', 'deg', 'kraadi', '°'].includes(normalized)) {
+        return '°'
+    }
+    return unit
+}
+
 function formatFieldValue(value, unit) {
     if (Array.isArray(value)) {
         return value.filter(isPresent).join(', ')
@@ -126,16 +172,37 @@ function formatFieldValue(value, unit) {
         return 'Teadmata'
     }
 
+    const formattedUnit = formatUnit(unit)
     const formattedValue = formatNumber(value)
-    if (unit && unit !== '%') {
-        return `${formattedValue} ${unit}`
+    if (formattedUnit === '%' || formattedUnit === '°') {
+        return `${formattedValue}${formattedUnit}`
     }
-
-    if (unit === '%') {
-        return `${formattedValue}%`
+    if (formattedUnit) {
+        return `${formattedValue} ${formattedUnit}`
     }
-
     return String(formattedValue)
+}
+
+function websiteHref(value) {
+    if (!isPresent(value)) {
+        return null
+    }
+
+    const text = String(value).trim()
+    if (!text) {
+        return null
+    }
+
+    return /^https?:\/\//i.test(text) ? text : `https://${text}`
+}
+
+function websiteLabel(value) {
+    if (!isPresent(value)) {
+        return null
+    }
+
+    const text = String(value).trim()
+    return text.length <= 28 ? text : 'koduleht'
 }
 
 function titleForItem(item) {
@@ -177,10 +244,7 @@ function appendLink(parent, item) {
 function createSection(title, options = {}) {
     const section = createElement('section', 'dashboard-section reveal')
     const header = createElement('div', 'section-header')
-    const titleGroup = createElement('div')
-    appendText(titleGroup, 'p', options.eyebrow || 'Ülevaade', 'eyebrow')
-    appendText(titleGroup, 'h2', title)
-    header.appendChild(titleGroup)
+    appendText(header, 'p', title, 'eyebrow')
 
     if (isPresent(options.count)) {
         appendText(header, 'span', String(options.count), 'count-badge')
@@ -200,42 +264,56 @@ function appendEmpty(parent, text = 'Seoseid ei leitud.') {
     return empty
 }
 
-function appendBadge(parent, text, modifier) {
+function appendBadge(parent, text, modifier, options = {}) {
     const className = modifier ? `status-badge ${modifier}` : 'status-badge'
-    return appendText(parent, 'span', text, className)
+    const badge = appendText(parent, 'span', text, className)
+    if (options.debug) {
+        markDebug(badge)
+    }
+    return badge
+}
+
+function appendDebugMeta(parent, text, className = 'result-meta') {
+    if (!text) {
+        return null
+    }
+
+    return markDebug(appendText(parent, 'p', text, className))
 }
 
 function renderParcelHero(parent, parcel) {
     const header = createElement('header', 'parcel-hero reveal')
     appendText(header, 'p', 'Kinnistu ülevaade', 'eyebrow')
     appendText(header, 'h1', parcel.l_aadress || parcel.tunnus || 'Valitud kinnistu')
-
-    const meta = createElement('div', 'hero-meta')
-    if (parcel.tunnus) {
-        appendBadge(meta, parcel.tunnus, 'neutral')
-    }
-    if (parcel.pindala) {
-        appendBadge(meta, `${formatNumber(parcel.pindala, 0)} m²`, 'neutral')
-    }
-    if (parcel.sihtotstarve) {
-        appendBadge(meta, parcel.sihtotstarve, 'neutral')
-    }
-    header.appendChild(meta)
     parent.appendChild(header)
 }
 
+function landUseRows(parcel) {
+    const rows = []
+    for (const index of [1, 2, 3]) {
+        const use = parcel[`siht${index}`]
+        const pct = parcel[`so_prts${index}`]
+        if (!isPresent(use)) {
+            continue
+        }
+
+        rows.push(`${use}${isPresent(pct) ? ` ${formatPercent(Number(pct)) || `${pct}%`}` : ''}`)
+    }
+    return rows
+}
+
 function renderParcelFacts(parent, parcel) {
-    const section = createSection('Kinnistu', {
-        eyebrow: 'Andmed',
+    const section = createSection('KINNISTU ANDMED', {
         summary: 'Põhiandmed katastri kirjest.',
     })
 
+    const landUses = landUseRows(parcel)
     const facts = [
         ['Aadress', parcel.l_aadress],
         ['Katastritunnus', parcel.tunnus],
         ['Pindala', parcel.pindala ? `${formatNumber(parcel.pindala, 0)} m²` : null],
-        ['Sihtotstarve', parcel.sihtotstarve || parcel.sihtotstarve_1],
         ['Omandivorm', parcel.omvorm],
+        ['Sihtotstarbed', landUses.length ? landUses.join(', ') : parcel.sihtotstarve || parcel.sihtotstarve_1],
     ].filter(([, value]) => isPresent(value))
 
     if (!facts.length) {
@@ -254,7 +332,7 @@ function renderParcelFacts(parent, parcel) {
     parent.appendChild(section)
 }
 
-function renderListGroup(parent, items, fields, emptyText, limit = 5) {
+function renderListGroup(parent, items, fields, emptyText, limit = 5, options = {}) {
     if (!items.length) {
         appendEmpty(parent, emptyText)
         return
@@ -266,7 +344,10 @@ function renderListGroup(parent, items, fields, emptyText, limit = 5) {
         appendText(listItem, 'span', titleForItem(item), 'result-title')
         const meta = metaFromFields(item, fields)
         if (meta) {
-            appendText(listItem, 'span', meta, 'result-meta')
+            const metaElement = appendText(listItem, 'span', meta, 'result-meta')
+            if (options.debugMeta) {
+                markDebug(metaElement)
+            }
         }
         appendLink(listItem, item)
         list.appendChild(listItem)
@@ -282,7 +363,10 @@ function renderListGroup(parent, items, fields, emptyText, limit = 5) {
             appendText(listItem, 'span', titleForItem(item), 'result-title')
             const meta = metaFromFields(item, fields)
             if (meta) {
-                appendText(listItem, 'span', meta, 'result-meta')
+                const metaElement = appendText(listItem, 'span', meta, 'result-meta')
+                if (options.debugMeta) {
+                    markDebug(metaElement)
+                }
             }
             appendLink(listItem, item)
             moreList.appendChild(listItem)
@@ -294,20 +378,19 @@ function renderListGroup(parent, items, fields, emptyText, limit = 5) {
 
 function renderPlanning(parent, detailPlans, searchValue) {
     const items = asItems(detailPlans)
-    const section = createSection('Planeering ja ehitusõigus', {
-        eyebrow: 'Planeering',
-        count: groupCount(detailPlans),
+    const section = createSection('PLANEERING JA EHITUSÕIGUS', {
         summary: items.length
-            ? 'Detailplaneeringu põhjal saab vaadata ehitusõiguse välju ja tõendusallikaid.'
-            : 'Selle kinnistuga seotud detailplaneeringut ei leitud.',
+            ? 'Seletuskirja põhjal saab analüüsida ehitusõigusi.'
+            : 'Selle kinnistuga seotud seletuskirja ei leitud.',
     })
 
     renderListGroup(
         section,
         items,
         ['kovid', 'planseis_nimi', 'kehtestkp_timeposition', 'parcel_coverage_pct'],
-        'Detailplaneeringuid ei leitud.',
+        'Seletuskirju ei leitud.',
         3,
+        { debugMeta: true },
     )
 
     if (items.length) {
@@ -323,6 +406,17 @@ function appendDetailPlanAnalysis(parent, searchValue) {
     const button = createElement('button', 'primary-button analysis-button', 'Analüüsi ehitusõigust')
     button.type = 'button'
     actions.appendChild(button)
+
+    const pdfButton = createElement('button', 'secondary-button', 'Laadi PDF')
+    pdfButton.type = 'button'
+    pdfButton.addEventListener('click', () => {
+        console.info('Detail-plan PDF download is not implemented yet.')
+        appendAnalysisMessage(output, 'PDFi allalaadimine ei ole veel ühendatud.', 'warning')
+    })
+    actions.appendChild(pdfButton)
+
+    const status = createElement('div', 'analysis-status')
+    actions.appendChild(status)
     panel.appendChild(actions)
 
     const output = createElement('div', 'analysis-output')
@@ -333,7 +427,7 @@ function appendDetailPlanAnalysis(parent, searchValue) {
     button.addEventListener('click', async () => {
         button.disabled = true
         button.textContent = 'Analüüs käib'
-        renderAnalysisLoading(output, 'Loen detailplaneeringu PDFi ja otsin ehitusõiguse välju.')
+        renderAnalysisLoading(status, 'Loen PDFi')
 
         try {
             const regexResult = await analyzeDetailPlan(searchValue, {
@@ -341,8 +435,8 @@ function appendDetailPlanAnalysis(parent, searchValue) {
             })
             renderAnalysisResult(output, regexResult, {
                 title: 'Reeglipõhine tulemus',
-                aiPending: true,
             })
+            renderAnalysisLoading(status, 'AI täpsustab')
 
             try {
                 const aiResult = await analyzeDetailPlan(searchValue, {
@@ -350,12 +444,14 @@ function appendDetailPlanAnalysis(parent, searchValue) {
                 })
                 renderAnalysisResult(output, aiResult, {
                     title: 'AI-ga täiendatud tulemus',
-                    aiPending: false,
                 })
+                status.replaceChildren()
             } catch (error) {
+                status.replaceChildren()
                 appendAnalysisMessage(output, `AI täiendamine ebaõnnestus: ${error.message}`, 'warning')
             }
         } catch (error) {
+            status.replaceChildren()
             output.replaceChildren()
             appendAnalysisMessage(output, error.message, 'error')
         } finally {
@@ -367,10 +463,9 @@ function appendDetailPlanAnalysis(parent, searchValue) {
 
 function renderAnalysisLoading(parent, text) {
     parent.replaceChildren()
-    const loader = createElement('div', 'ai-loader')
+    const loader = createElement('div', 'ai-loader compact')
     appendText(loader, 'span', '', 'loader-orb')
     appendText(loader, 'strong', text)
-    appendText(loader, 'small', 'See võib võtta veidi aega.')
     parent.appendChild(loader)
 }
 
@@ -385,7 +480,7 @@ function renderAnalysisResult(parent, result, options) {
     const header = createElement('div', 'analysis-result-header')
     appendText(header, 'h3', options.title)
     const status = result?.status ? `Staatus: ${result.status}` : 'Staatus teadmata'
-    appendBadge(header, status, result?.status === 'ok' ? 'success' : 'warning')
+    appendBadge(header, status, result?.status === 'ok' ? 'success' : 'warning', { debug: true })
     parent.appendChild(header)
 
     if (Array.isArray(result?.setup_issues) && result.setup_issues.length) {
@@ -400,7 +495,7 @@ function renderAnalysisResult(parent, result, options) {
     renderBuildingRightFields(parent, result?.building_right)
 
     if (Array.isArray(result?.sources) && result.sources.length) {
-        const details = createElement('details', 'evidence-details')
+        const details = markDebug(createElement('details', 'evidence-details'))
         appendText(details, 'summary', `Allikad (${result.sources.length})`)
         for (const source of result.sources) {
             const row = createElement('p')
@@ -409,19 +504,27 @@ function renderAnalysisResult(parent, result, options) {
         }
         parent.appendChild(details)
     }
+}
 
-    if (options.aiPending) {
-        const pending = createElement('div', 'ai-pending')
-        appendText(pending, 'span', '', 'loader-orb')
-        appendText(pending, 'strong', 'AI täpsustab tulemust')
-        appendText(pending, 'small', 'Reeglipõhine tulemus on juba kasutatav.')
-        parent.appendChild(pending)
+function firstEvidencePage(field) {
+    if (field?.evidence?.page) {
+        return field.evidence.page
     }
+
+    for (const candidate of field?.candidates || []) {
+        if (candidate.evidence?.page) {
+            return candidate.evidence.page
+        }
+    }
+
+    return null
 }
 
 function renderBuildingRightFields(parent, buildingRight) {
     const fields = buildingRight?.fields || {}
     const fieldEntries = Object.entries(fields)
+        .filter(([key]) => !HIDDEN_BUILDING_FIELD_KEYS.has(key))
+
     if (!fieldEntries.length) {
         appendEmpty(parent, 'Ehitusõiguse välju ei leitud.')
         return
@@ -445,13 +548,16 @@ function renderBuildingRightFields(parent, buildingRight) {
 
         appendText(card, 'p', formatFieldValue(field.value, field.unit), 'field-value')
 
+        const page = firstEvidencePage(field)
+        if (page) {
+            appendText(card, 'p', `lk ${page}`, 'field-page')
+        }
+
         const meta = [
             field.source_type ? `Allikas: ${field.source_type}` : null,
             typeof field.confidence === 'number' ? `Kindlus: ${formatPercent(field.confidence * 100)}` : null,
         ].filter(Boolean).join(' · ')
-        if (meta) {
-            appendText(card, 'p', meta, 'result-meta')
-        }
+        appendDebugMeta(card, meta)
 
         if (field.needs_review?.length) {
             const review = createElement('div', 'review-box')
@@ -483,16 +589,13 @@ function appendEvidence(parent, field) {
         return
     }
 
-    const details = createElement('details', 'evidence-details')
+    const details = markDebug(createElement('details', 'evidence-details'))
     appendText(details, 'summary', `Tõendus (${evidenceItems.length})`)
 
     for (const evidence of evidenceItems.slice(0, 4)) {
         const item = createElement('blockquote')
-        const source = [evidence.pdf, evidence.page ? `lk ${evidence.page}` : null]
-            .filter(Boolean)
-            .join(', ')
-        if (source) {
-            appendText(item, 'cite', source)
+        if (evidence.pdf) {
+            appendText(item, 'cite', evidence.pdf)
         }
         appendText(item, 'p', evidence.text || 'Tõenduse tekst puudub.')
         details.appendChild(item)
@@ -505,8 +608,7 @@ function renderRisks(parent, response) {
     const heritage = asItems(response.heritage_pois)
     const restrictions = asItems(response.restriction_areas)
     const total = heritage.length + restrictions.length
-    const section = createSection('Piirangud ja riskid', {
-        eyebrow: 'Riskid',
+    const section = createSection('PIIRANGUD', {
         count: total,
         summary: total
             ? 'Kinnistuga kattuvad või seotud kaitse- ja kitsendusalad.'
@@ -541,10 +643,56 @@ function renderRisks(parent, response) {
     parent.appendChild(section)
 }
 
+function extractNoiseGeoJson(noiseLevels) {
+    const candidate = noiseLevels?.geojson
+        || noiseLevels?.noise_geojson
+        || noiseLevels?.areas_geojson
+        || noiseLevels?.areas
+    if (!candidate) {
+        return null
+    }
+
+    if (candidate.type === 'FeatureCollection') {
+        return candidate
+    }
+
+    if (Array.isArray(candidate.features)) {
+        return {
+            type: 'FeatureCollection',
+            features: candidate.features,
+        }
+    }
+
+    return null
+}
+
 function renderEnvironment(parent, noiseLevels) {
-    const section = createSection('Keskkond', {
-        eyebrow: 'Müra',
+    const section = createSection('MÜRA', {
         summary: 'Mürataseme hinnang kinnistul ja lähialas.',
+    })
+
+    const toolbar = createElement('div', 'section-toolbar')
+    const noiseToggle = createElement('button', 'secondary-button', noiseOverlayVisible ? 'Peida müraala' : 'Näita müraala')
+    noiseToggle.type = 'button'
+    currentNoiseGeoJson = extractNoiseGeoJson(noiseLevels)
+    toolbar.appendChild(noiseToggle)
+    section.appendChild(toolbar)
+
+    noiseToggle.addEventListener('click', () => {
+        if (!currentNoiseGeoJson) {
+            console.info('Noise area GeoJSON is not available in the current payload.')
+            appendEmpty(section, 'Müraala GeoJSON puudub praeguses vastuses.')
+            return
+        }
+
+        noiseOverlayVisible = !noiseOverlayVisible
+        if (noiseOverlayVisible) {
+            setNoiseOverlay(map, currentNoiseGeoJson)
+            noiseToggle.textContent = 'Peida müraala'
+        } else {
+            clearNoiseOverlay(map)
+            noiseToggle.textContent = 'Näita müraala'
+        }
     })
 
     if (!noiseLevels || typeof noiseLevels !== 'object') {
@@ -575,17 +723,17 @@ function appendNoiseCard(parent, title, noise) {
     appendText(card, 'p', display, 'noise-value')
 
     const meter = createElement('div', 'noise-meter')
-    const fill = createElement('span')
+    const indicator = createElement('span', 'noise-indicator')
     const percent = Math.max(0, Math.min(100, (((dbValue ?? 40) - 40) / 40) * 100))
-    fill.style.width = `${percent}%`
-    meter.appendChild(fill)
+    indicator.style.left = `${percent}%`
+    meter.appendChild(indicator)
     card.appendChild(meter)
 
     const meta = [
         noise.result_type === 'upper_bound' ? 'Ülempiiri hinnang' : 'Keskmine hinnang',
         typeof noise.mapped_pct === 'number' ? `Kaetus ${formatPercent(noise.mapped_pct)}` : null,
     ].filter(Boolean).join(' · ')
-    appendText(card, 'p', meta, 'result-meta')
+    appendDebugMeta(card, meta)
     parent.appendChild(card)
 }
 
@@ -598,34 +746,112 @@ function stableColorForLabel(label) {
     return POI_COLORS[hash]
 }
 
-function buildPoiFeatureCollection(nearbyPois) {
-    const features = []
-    for (const [categoryId, group] of Object.entries(nearbyPois || {})) {
-        const categoryLabel = group?.label || categoryId
-        const color = stableColorForLabel(categoryLabel)
-        for (const item of asItems(group)) {
-            if (item?.geometry?.type !== 'Point' || !Array.isArray(item.geometry.coordinates)) {
-                continue
-            }
+function poiKey(categoryId, index) {
+    return `${categoryId}:${index}`
+}
 
-            features.push({
-                type: 'Feature',
-                geometry: item.geometry,
-                properties: {
-                    name: item.nimi || categoryLabel,
-                    address: item.aadress || '',
-                    categoryId,
-                    categoryLabel,
-                    color,
-                },
-            })
-        }
+function poiFeatureFromItem(categoryId, group, item, index) {
+    if (item?.geometry?.type !== 'Point' || !Array.isArray(item.geometry.coordinates)) {
+        return null
     }
 
+    const categoryLabel = group?.label || categoryId
+    const subgroup = item.alamgrupp || item.grupp || item.poi_type || ''
+    const distanceLabel = formatDistance(item.kaugus_m) || ''
+    const website = item.www || ''
+
+    return {
+        type: 'Feature',
+        geometry: item.geometry,
+        properties: {
+            poiKey: poiKey(categoryId, index),
+            name: item.nimi || categoryLabel,
+            address: item.aadress || '',
+            categoryId,
+            categoryLabel,
+            subgroup,
+            distanceLabel,
+            website,
+            color: stableColorForLabel(categoryLabel),
+        },
+    }
+}
+
+function buildPoiFeatureCollection(nearbyPois) {
+    const features = []
+    const featureMap = new Map()
+    for (const [categoryId, group] of Object.entries(nearbyPois || {})) {
+        asItems(group).forEach((item, index) => {
+            const feature = poiFeatureFromItem(categoryId, group, item, index)
+            if (!feature) {
+                return
+            }
+
+            features.push(feature)
+            featureMap.set(feature.properties.poiKey, feature)
+        })
+    }
+
+    currentPoiFeaturesByKey = featureMap
     return {
         type: 'FeatureCollection',
         features,
     }
+}
+
+function focusPoiFromPanel(feature, toggle) {
+    if (!feature) {
+        return
+    }
+
+    if (!poiOverlayVisible) {
+        poiOverlayVisible = true
+        setPoiOverlay(map, currentPoiCollection)
+        toggle.textContent = 'Peida kaardilt'
+    }
+
+    focusPoiOnMap(map, feature)
+}
+
+function appendWebsiteLink(parent, www) {
+    const href = websiteHref(www)
+    if (!href) {
+        return
+    }
+
+    const link = createElement('a', 'poi-website-link', websiteLabel(www))
+    link.href = href
+    link.target = '_blank'
+    link.rel = 'noreferrer'
+    parent.appendChild(link)
+}
+
+function renderPoiItem(parent, categoryId, group, item, index, toggle) {
+    const feature = currentPoiFeaturesByKey.get(poiKey(categoryId, index))
+    const listItem = createElement('li', 'poi-list-item')
+
+    const button = createElement('button', 'poi-item-button')
+    button.type = 'button'
+    button.addEventListener('click', () => focusPoiFromPanel(feature, toggle))
+
+    const top = createElement('span', 'poi-item-top')
+    appendText(top, 'span', item.nimi || 'Nimetu objekt', 'result-title')
+    const distance = formatDistance(item.kaugus_m)
+    if (distance) {
+        appendText(top, 'span', distance, 'poi-distance')
+    }
+    button.appendChild(top)
+
+    const meta = createElement('span', 'poi-item-meta')
+    appendText(meta, 'span', item.alamgrupp || item.grupp || 'Muu')
+    if (item.aadress) {
+        appendText(meta, 'span', item.aadress)
+    }
+    button.appendChild(meta)
+
+    listItem.appendChild(button)
+    appendWebsiteLink(listItem, item.www)
+    parent.appendChild(listItem)
 }
 
 function renderNearby(parent, nearbyPois) {
@@ -634,8 +860,7 @@ function renderNearby(parent, nearbyPois) {
         .filter(([, , items]) => items.length)
     const itemCount = groups.reduce((sum, [, , items]) => sum + items.length, 0)
 
-    const section = createSection('Läheduses', {
-        eyebrow: 'Teenused',
+    const section = createSection('TEENUSED LÄHEDUSES', {
         count: itemCount,
         summary: itemCount
             ? 'Lähimad teenused ja huvipunktid kategooriate kaupa.'
@@ -667,7 +892,7 @@ function renderNearby(parent, nearbyPois) {
     }
 
     const groupList = createElement('div', 'poi-groups')
-    for (const [, group, items] of groups) {
+    for (const [categoryId, group, items] of groups) {
         const category = createElement('article', 'poi-group')
         const header = createElement('div', 'poi-group-header')
         const swatch = createElement('span', 'poi-swatch')
@@ -676,35 +901,19 @@ function renderNearby(parent, nearbyPois) {
         appendText(header, 'h3', `${group.label || 'Huvipunktid'} (${items.length})`)
         category.appendChild(header)
 
-        const list = createElement('ul', 'compact-list')
-        for (const item of items.slice(0, 3)) {
-            const listItem = createElement('li')
-            appendText(listItem, 'span', item.nimi || 'Nimetu objekt', 'result-title')
-            const meta = [
-                item.aadress,
-                formatDistance(item.kaugus_m),
-                item.alamgrupp || item.grupp,
-            ].filter(Boolean).join(' · ')
-            if (meta) {
-                appendText(listItem, 'span', meta, 'result-meta')
-            }
-            list.appendChild(listItem)
-        }
+        const list = createElement('ul', 'poi-list')
+        items.slice(0, 3).forEach((item, index) => {
+            renderPoiItem(list, categoryId, group, item, index, toggle)
+        })
         category.appendChild(list)
 
         if (items.length > 3) {
             const details = createElement('details', 'more-details')
             appendText(details, 'summary', `Kuva veel ${items.length - 3}`)
-            const moreList = createElement('ul', 'compact-list')
-            for (const item of items.slice(3)) {
-                const listItem = createElement('li')
-                appendText(listItem, 'span', item.nimi || 'Nimetu objekt', 'result-title')
-                const meta = [item.aadress, formatDistance(item.kaugus_m)].filter(Boolean).join(' · ')
-                if (meta) {
-                    appendText(listItem, 'span', meta, 'result-meta')
-                }
-                moreList.appendChild(listItem)
-            }
+            const moreList = createElement('ul', 'poi-list')
+            items.slice(3).forEach((item, offset) => {
+                renderPoiItem(moreList, categoryId, group, item, offset + 3, toggle)
+            })
             details.appendChild(moreList)
             category.appendChild(details)
         }
@@ -719,12 +928,20 @@ function renderNearby(parent, nearbyPois) {
 function resetPoiOverlay() {
     poiOverlayVisible = false
     currentPoiCollection = emptyFeatureCollection()
+    currentPoiFeaturesByKey = new Map()
     clearPoiOverlay(map)
+}
+
+function resetNoiseOverlay() {
+    noiseOverlayVisible = false
+    currentNoiseGeoJson = null
+    clearNoiseOverlay(map)
 }
 
 function renderParcelResponse(response, searchValue) {
     resultsPanel.replaceChildren()
     resetPoiOverlay()
+    resetNoiseOverlay()
 
     if (response?.error) {
         const panel = createElement('div', 'empty-panel')
@@ -735,13 +952,16 @@ function renderParcelResponse(response, searchValue) {
         return
     }
 
+    const parcel = response?.Aadress || {}
+    if (parcel.l_aadress) {
+        searchInput.value = parcel.l_aadress
+    }
     currentPoiCollection = buildPoiFeatureCollection(response?.nearby_pois)
 
     const dashboard = createElement('div', 'parcel-dashboard')
-    const parcel = response?.Aadress || {}
     renderParcelHero(dashboard, parcel)
     renderParcelFacts(dashboard, parcel)
-    renderPlanning(dashboard, response?.detail_plans, searchValue)
+    renderPlanning(dashboard, response?.detail_plans, parcel.l_aadress || searchValue)
     renderRisks(dashboard, response || {})
     renderEnvironment(dashboard, response?.noise_levels)
     renderNearby(dashboard, response?.nearby_pois)
@@ -768,6 +988,7 @@ async function handleParcelSearch(value) {
         renderParcelResponse(response, trimmedValue)
     } catch (error) {
         resetPoiOverlay()
+        resetNoiseOverlay()
         resultsPanel.replaceChildren()
         const panel = createElement('div', 'empty-panel')
         appendText(panel, 'p', 'Viga', 'eyebrow')
@@ -780,12 +1001,39 @@ async function handleParcelSearch(value) {
     }
 }
 
+function updateAddressSuggestions() {
+    const query = searchInput.value.trim()
+    searchSuggestions.replaceChildren()
+    closestAddressSuggestion = ''
+    searchSuggestionHint.hidden = true
+    searchSuggestionHint.textContent = ''
+
+    if (query.length < 2 || classifyParcelSearchInput(query).type !== 'address') {
+        return
+    }
+
+    const suggestions = getAddressSuggestions(map, query, 6)
+    for (const suggestion of suggestions) {
+        const option = document.createElement('option')
+        option.value = suggestion
+        searchSuggestions.appendChild(option)
+    }
+
+    if (suggestions[0] && suggestions[0] !== query) {
+        closestAddressSuggestion = suggestions[0]
+        searchSuggestionHint.textContent = `Lähim vaste: ${closestAddressSuggestion}`
+        searchSuggestionHint.hidden = false
+    }
+}
+
 const map = createMap("map", {
     onParcelClick: async function(feature) {
+        const address = feature.properties?.l_aadress
         const tunnus = feature.properties?.tunnus
-        if (tunnus) {
-            searchInput.value = tunnus
-            await handleParcelSearch(tunnus)
+        const lookupValue = tunnus || address
+        if (lookupValue) {
+            searchInput.value = address || lookupValue
+            await handleParcelSearch(lookupValue)
         }
     },
 })
@@ -793,4 +1041,24 @@ const map = createMap("map", {
 searchForm.addEventListener('submit', async (event) => {
     event.preventDefault()
     await handleParcelSearch(searchInput.value)
+})
+
+searchInput.addEventListener('input', updateAddressSuggestions)
+searchInput.addEventListener('focus', updateAddressSuggestions)
+searchInput.addEventListener('keydown', (event) => {
+    if ((event.key === 'Tab' || event.key === 'ArrowRight') && closestAddressSuggestion) {
+        event.preventDefault()
+        searchInput.value = closestAddressSuggestion
+        updateAddressSuggestions()
+    }
+})
+
+searchSuggestionHint.addEventListener('click', () => {
+    if (!closestAddressSuggestion) {
+        return
+    }
+
+    searchInput.value = closestAddressSuggestion
+    updateAddressSuggestions()
+    searchInput.focus()
 })

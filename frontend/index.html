@@ -16,9 +16,12 @@
     <form id="search-bar" class="search-card" role="search">
       <label id="search-header" for="search-input">Aadress või katastritunnus</label>
       <div class="search-row">
-        <input id="search-input" type="search" value="P. Kerese tn 5a" autocomplete="street-address">
+        <input id="search-input" type="search" value="P. Kerese tn 5a" autocomplete="street-address"
+          list="search-suggestions">
+        <datalist id="search-suggestions"></datalist>
         <button id="search-button" class="primary-button" type="submit">Otsi</button>
       </div>
+      <button id="search-suggestion-hint" class="search-suggestion-hint" type="button" hidden></button>
     </form>
 
     <aside id="results-panel" class="results-drawer" aria-live="polite" aria-label="Kinnistu andmed">
