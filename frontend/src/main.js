@@ -5,6 +5,7 @@ import {
     clearNoiseOverlay,
     clearPoiOverlay,
     createMap,
+    focusParcelByAddress,
     focusParcelByTunnus,
     focusPoiOnMap,
     getAddressSuggestions,
@@ -17,7 +18,7 @@ const SHOW_DEBUG_HTML = import.meta.env.VITE_SHOW_DEBUG_HTML === 'true'
 const searchForm = getRequiredElement('search-bar', HTMLFormElement)
 const searchButton = getRequiredElement('search-button', HTMLButtonElement)
 const searchInput = getRequiredElement('search-input', HTMLInputElement)
-const searchSuggestions = getRequiredElement('search-suggestions', HTMLDataListElement)
+const searchSuggestions = getRequiredElement('search-suggestions', HTMLElement)
 const searchSuggestionHint = getRequiredElement('search-suggestion-hint', HTMLButtonElement)
 const resultsPanel = getRequiredElement('results-panel', HTMLElement)
 searchInput.name = `parcel-search-${Date.now()}`
@@ -58,6 +59,8 @@ let currentNoiseGeoJson = null
 let poiOverlayVisible = false
 let noiseOverlayVisible = false
 let closestAddressSuggestion = ''
+let currentAddressSuggestions = []
+let activeSuggestionIndex = -1
 
 function emptyFeatureCollection() {
     return {
@@ -967,7 +970,7 @@ function renderParcelResponse(response, searchValue) {
         searchInput.value = parcel.l_aadress
     }
     if (parcel.tunnus) {
-        focusParcelByTunnus(map, parcel.tunnus)
+        focusParcelByTunnus(map, parcel.tunnus, parcel.l_aadress || searchValue)
     }
     currentPoiCollection = buildPoiFeatureCollection(response?.nearby_pois)
 
@@ -989,6 +992,10 @@ async function handleParcelSearch(value) {
 
     searchButton.disabled = true
     searchButton.textContent = 'Otsin'
+    hideAddressSuggestions()
+    if (classifyParcelSearchInput(trimmedValue).type === 'address') {
+        focusParcelByAddress(map, trimmedValue)
+    }
     resetPoiOverlay()
     resetNoiseOverlay()
     resultsPanel.replaceChildren()
@@ -1019,18 +1026,32 @@ async function handleParcelSearch(value) {
 function updateAddressSuggestions() {
     const query = searchInput.value.trim()
     searchSuggestions.replaceChildren()
+    currentAddressSuggestions = []
+    activeSuggestionIndex = -1
     closestAddressSuggestion = ''
     searchSuggestionHint.hidden = true
     searchSuggestionHint.textContent = ''
+    searchSuggestions.hidden = true
 
     if (query.length < 2 || classifyParcelSearchInput(query).type !== 'address') {
         return
     }
 
     const suggestions = getAddressSuggestions(map, query, 6)
+    currentAddressSuggestions = suggestions
+
+    if (suggestions.length) {
+        searchSuggestions.hidden = false
+    }
+
     for (const suggestion of suggestions) {
-        const option = document.createElement('option')
-        option.value = suggestion
+        const option = createElement('button', 'search-suggestion-option', suggestion)
+        option.type = 'button'
+        option.setAttribute('role', 'option')
+        option.addEventListener('mousedown', (event) => {
+            event.preventDefault()
+            chooseAddressSuggestion(suggestion)
+        })
         searchSuggestions.appendChild(option)
     }
 
@@ -1039,6 +1060,32 @@ function updateAddressSuggestions() {
         searchSuggestionHint.textContent = `Lähim vaste: ${closestAddressSuggestion}`
         searchSuggestionHint.hidden = false
     }
+}
+
+function hideAddressSuggestions() {
+    searchSuggestions.hidden = true
+    activeSuggestionIndex = -1
+    for (const option of searchSuggestions.children) {
+        option.classList.remove('is-active')
+    }
+}
+
+function chooseAddressSuggestion(suggestion) {
+    searchInput.value = suggestion
+    hideAddressSuggestions()
+    focusParcelByAddress(map, suggestion)
+    searchInput.focus()
+}
+
+function setActiveSuggestion(index) {
+    if (!currentAddressSuggestions.length) {
+        return
+    }
+
+    activeSuggestionIndex = (index + currentAddressSuggestions.length) % currentAddressSuggestions.length
+    Array.from(searchSuggestions.children).forEach((option, optionIndex) => {
+        option.classList.toggle('is-active', optionIndex === activeSuggestionIndex)
+    })
 }
 
 const map = createMap("map", {
@@ -1061,10 +1108,32 @@ searchForm.addEventListener('submit', async (event) => {
 searchInput.addEventListener('input', updateAddressSuggestions)
 searchInput.addEventListener('focus', updateAddressSuggestions)
 searchInput.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' && currentAddressSuggestions.length) {
+        event.preventDefault()
+        setActiveSuggestion(activeSuggestionIndex + 1)
+        return
+    }
+
+    if (event.key === 'ArrowUp' && currentAddressSuggestions.length) {
+        event.preventDefault()
+        setActiveSuggestion(activeSuggestionIndex - 1)
+        return
+    }
+
+    if (event.key === 'Enter' && activeSuggestionIndex >= 0) {
+        event.preventDefault()
+        chooseAddressSuggestion(currentAddressSuggestions[activeSuggestionIndex])
+        return
+    }
+
+    if (event.key === 'Escape') {
+        hideAddressSuggestions()
+        return
+    }
+
     if ((event.key === 'Tab' || event.key === 'ArrowRight') && closestAddressSuggestion) {
         event.preventDefault()
-        searchInput.value = closestAddressSuggestion
-        updateAddressSuggestions()
+        chooseAddressSuggestion(closestAddressSuggestion)
     }
 })
 
@@ -1073,7 +1142,11 @@ searchSuggestionHint.addEventListener('click', () => {
         return
     }
 
-    searchInput.value = closestAddressSuggestion
-    updateAddressSuggestions()
-    searchInput.focus()
+    chooseAddressSuggestion(closestAddressSuggestion)
+})
+
+document.addEventListener('mousedown', (event) => {
+    if (!searchForm.contains(event.target)) {
+        hideAddressSuggestions()
+    }
 })

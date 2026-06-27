@@ -33,7 +33,7 @@ function addMapEvents(map, options) {
 
     map.on("click", "parcel-fill", (event) => {
         const poiFeatures = map.queryRenderedFeatures(event.point, {
-            layers: [POI_CIRCLE_LAYER_ID, POI_SELECTED_LAYER_ID],
+            layers: [POI_CIRCLE_LAYER_ID, POI_LABEL_LAYER_ID, POI_SELECTED_LAYER_ID],
         })
         if (poiFeatures.length) {
             return
@@ -258,6 +258,7 @@ function ensurePoiLayers(map) {
                     18,
                 ],
                 'circle-stroke-color': '#111827',
+                'circle-stroke-opacity': 1,
                 'circle-stroke-width': 3,
                 'circle-opacity': 0.95,
             },
@@ -338,6 +339,18 @@ function clearSelectedPoi(map) {
     const source = map.getSource(POI_SELECTED_SOURCE_ID)
     if (source) {
         source.setData(emptyFeatureCollection())
+    }
+}
+
+function normalizeFeature(feature) {
+    if (!feature?.geometry) {
+        return null
+    }
+
+    return {
+        type: 'Feature',
+        geometry: feature.geometry,
+        properties: { ...(feature.properties || {}) },
     }
 }
 
@@ -438,7 +451,7 @@ function addPoiEvents(map) {
         showPoiPopup(map, feature, false)
     })
 
-    map.on('click', POI_CIRCLE_LAYER_ID, (event) => {
+    function handlePoiClick(event) {
         const feature = event.features?.[0]
         if (!feature) {
             return
@@ -449,7 +462,10 @@ function addPoiEvents(map) {
         }
         event.originalEvent?.stopPropagation()
         focusPoiOnMap(map, feature)
-    })
+    }
+
+    map.on('click', POI_CIRCLE_LAYER_ID, handlePoiClick)
+    map.on('click', POI_LABEL_LAYER_ID, handlePoiClick)
 
     map.on('mouseleave', POI_CIRCLE_LAYER_ID, () => {
         map.getCanvas().style.cursor = ''
@@ -576,6 +592,48 @@ function parcelFeaturesByTunnus(map, tunnus) {
     }
 }
 
+function parcelFeaturesByAddress(map, address) {
+    if (!address || !map.loaded() || !map.getLayer('parcel-fill')) {
+        return []
+    }
+
+    const rendered = map.queryRenderedFeatures(undefined, {
+        layers: ['parcel-fill'],
+        filter: ['==', ['get', 'l_aadress'], address],
+    })
+    if (rendered.length) {
+        return rendered
+    }
+
+    try {
+        return map.querySourceFeatures('tallinn_parcels', {
+            sourceLayer: 'tallinn_parcels',
+            filter: ['==', ['get', 'l_aadress'], address],
+        })
+    } catch {
+        return []
+    }
+}
+
+function focusParcelFeature(map, feature) {
+    const tunnus = feature?.properties?.tunnus
+    if (tunnus) {
+        setSelectedParcel(map, tunnus)
+    }
+
+    const bounds = boundsForFeature(feature)
+    if (bounds) {
+        map.fitBounds(bounds, {
+            padding: 96,
+            maxZoom: 17,
+            duration: 500,
+        })
+        return true
+    }
+
+    return false
+}
+
 export function createMap(id, options = {}) {
     const map = new maplibregl.Map({
         container: id,
@@ -613,18 +671,29 @@ export function setSelectedParcel(map, tunnus) {
     })
 }
 
-export function focusParcelByTunnus(map, tunnus) {
+export function focusParcelByTunnus(map, tunnus, fallbackAddress = '') {
     runWhenMapReady(map, () => {
         setSelectedParcel(map, tunnus)
-        const feature = parcelFeaturesByTunnus(map, tunnus)[0]
-        const bounds = boundsForFeature(feature)
-        if (bounds) {
-            map.fitBounds(bounds, {
-                padding: 96,
-                maxZoom: 17,
-                duration: 500,
-            })
+        let attempts = 0
+
+        function tryFocus() {
+            attempts += 1
+            const feature = parcelFeaturesByTunnus(map, tunnus)[0]
+                || parcelFeaturesByAddress(map, fallbackAddress)[0]
+            if (focusParcelFeature(map, feature) || attempts >= 4) {
+                return
+            }
+            map.once('idle', tryFocus)
         }
+
+        tryFocus()
+    })
+}
+
+export function focusParcelByAddress(map, address) {
+    runWhenMapReady(map, () => {
+        const feature = parcelFeaturesByAddress(map, address)[0]
+        focusParcelFeature(map, feature)
     })
 }
 
@@ -655,15 +724,20 @@ export function clearPoiOverlay(map) {
 export function focusPoiOnMap(map, feature) {
     runWhenMapReady(map, () => {
         ensurePoiLayers(map)
+        const selectedFeature = normalizeFeature(feature)
+        if (!selectedFeature) {
+            return
+        }
+
         const source = map.getSource(POI_SELECTED_SOURCE_ID)
         if (source) {
             source.setData({
                 type: 'FeatureCollection',
-                features: [feature],
+                features: [selectedFeature],
             })
         }
 
-        const coordinates = feature?.geometry?.coordinates
+        const coordinates = selectedFeature.geometry.coordinates
         if (Array.isArray(coordinates)) {
             map.easeTo({
                 center: coordinates,
@@ -671,7 +745,7 @@ export function focusPoiOnMap(map, feature) {
                 duration: 450,
             })
         }
-        showPoiPopup(map, feature, true)
+        showPoiPopup(map, selectedFeature, true)
     })
 }
 
@@ -700,11 +774,17 @@ export function getAddressSuggestions(map, query, limit = 6) {
     let features = []
 
     try {
-        features = map.querySourceFeatures('tallinn_parcels', {
+        features = features.concat(map.querySourceFeatures('tallinn_parcels', {
             sourceLayer: 'tallinn_parcels',
-        })
+        }))
     } catch {
-        features = map.queryRenderedFeatures(undefined, { layers: ['parcel-fill'] })
+        // Ignore missing source while the map is still warming up.
+    }
+
+    try {
+        features = features.concat(map.queryRenderedFeatures(undefined, { layers: ['parcel-fill'] }))
+    } catch {
+        // Ignore missing rendered layer while the map is still warming up.
     }
 
     return features

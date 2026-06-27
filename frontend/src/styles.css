@@ -112,6 +112,37 @@ a:focus-visible {
   text-decoration: underline;
 }
 
+.search-suggestions {
+  background: #ffffff;
+  border: 1px solid #d7deea;
+  border-radius: 7px;
+  box-shadow: 0 16px 34px rgb(15 23 42 / 18%);
+  display: grid;
+  left: 14px;
+  overflow: hidden;
+  position: absolute;
+  right: 86px;
+  top: 92px;
+  z-index: 30;
+}
+
+.search-suggestions[hidden] {
+  display: none;
+}
+
+.search-suggestion-option {
+  background: #ffffff;
+  color: #111827;
+  cursor: pointer;
+  padding: 9px 12px;
+  text-align: left;
+}
+
+.search-suggestion-option:hover,
+.search-suggestion-option.is-active {
+  background: #eef2f7;
+}
+
 .primary-button,
 .secondary-button {
   align-items: center;
@@ -257,6 +288,8 @@ button:disabled {
 .status-badge {
   background: #eef2f7;
   color: #334155;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .status-badge.success {
