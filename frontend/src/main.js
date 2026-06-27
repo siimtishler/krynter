@@ -97,7 +97,7 @@ function appendDetailPlanAnalysis(parent, detailPlans, searchValue) {
 
     button.addEventListener('click', async () => {
         button.disabled = true
-        output.value = 'Analüüsin detailplaneeringu PDFi...'
+        output.value = 'Loen detailplaneeringu PDFi...'
         try {
             const result = await analyzeDetailPlan(searchValue)
             output.value = JSON.stringify(result, null, 2)

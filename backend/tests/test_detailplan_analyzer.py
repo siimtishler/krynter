@@ -3,13 +3,12 @@ from pathlib import Path
 
 import fitz
 import geopandas as gpd
-import httpx
 import pytest
 from fastapi import HTTPException
 from shapely.geometry import Point
 
 from backend.api import api
-from backend.detailplan_analyzer import analyzer, llm
+from backend.detailplan_analyzer import analyzer
 from backend.detailplan_analyzer.extraction import (
     PageText,
     TextChunk,
@@ -21,16 +20,13 @@ from backend.detailplan_analyzer.models import (
     AnalysisStatus,
     DetailPlanAnalysisResponse,
     DetailPlanMeta,
-    LLMBuildingRight,
-    LLMValue,
-    StructuredLLMResponse,
 )
 from backend.detailplan_analyzer.pdfs import (
     OCRRuntime,
     cached_plan_pdfs,
     extract_relevant_pdfs,
 )
-from backend.detailplan_analyzer.rules import run_rule_based_extractors
+from backend.detailplan_analyzer.rules import extract_building_rights
 from backend.geo import Parcel
 
 
@@ -127,59 +123,380 @@ def test_select_relevant_chunks_uses_address_and_downranks_toc(tmp_path):
     assert [chunk.page for chunk in chunks] == [2, 3]
 
 
-def test_rule_based_extractors_find_estonian_planning_fields(tmp_path):
+def test_regex_extracts_building_right_fields(tmp_path):
     chunk = TextChunk(
         pdf_path=tmp_path / "plan.pdf",
         page=4,
         text=(
-            "Krundi suurus 1 200 m²\n"
-            "Sihtotstarve elamumaa 100%\n"
-            "Korruselisus 2\n"
+            "Krundi pind 1 200 m²\n"
+            "Maakasutuse sihtotstarve: elamumaa, ärimaa\n"
             "Täisehitus 25,5%\n"
-            "Hoone maksimaalne kõrgus 9,5 m\n"
-            "Hoonete arv 2\n"
-            "Parkimine lahendada krundil.\n"
-            "Tehnovõrkude lahendus täpsustatakse projektis.\n"
-            "Servituut seatakse tehnovõrgu kaitseks."
+            "Brutopind 1 500,5 m2\n"
+            "Ehitusalune pind max: 440 m2\n"
+            "Korruselisus: väikeelamul 2, kortermajal kuni 3\n"
+            "Lubatud eraldiseisvate hoonete arv 3, Mai tn. 2a krundil 2, neist 1 elamu\n"
+            "Maksimaalne hoonestuse kõrgus: väikeelamul 9 m\n"
+            "Hoone katuse kalle 0-45\n"
+            "Hoonete tulepüsivusaste TP-3\n"
         ),
         score=10,
         reasons=["test"],
     )
 
-    result = run_rule_based_extractors([chunk])
+    result = extract_building_rights([chunk])
+    fields = result.fields
 
-    assert result.building_right["krundi_suurus"].value == 1200
-    assert result.building_right["taisehitus"].value == 25.5
-    assert result.building_right["korgus"].value == 9.5
-    assert result.building_right["hoonete_arv"].value == 2
-    assert result.section_facts["tehnovorgud"]
-    assert result.section_facts["servituudid_ja_kitsendused"]
+    assert fields["krundi_pind_m2"].value == 1200
+    assert fields["taisehitus_pct"].value == 25.5
+    assert fields["brutopind_m2"].value == 1500.5
+    assert fields["ehitusalune_pind_m2"].value == 440
+    assert fields["lubatud_korrused"].value == "väikeelamul 2, kortermajal kuni 3"
+    assert fields["lubatud_majade_ehitamise_arv"].value == 3
+    assert fields["hoonete_lubatud_korgused_m"].value == "väikeelamul 9 m"
+    assert fields["hoonete_arv"].value == 3
+    assert fields["kasutusotstarve"].value == "elamumaa, ärimaa"
+    assert fields["katusekalle"].value == "0-45"
+    assert fields["tulepusivusklass"].value == "TP-3"
 
 
-def test_analyze_pdfs_computes_derived_field_and_flags_conflict(monkeypatch, tmp_path):
+def test_regex_korruselisus_does_not_use_height_line_number(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=2,
+        text=(
+            "Maksimaalne hoonestuse kõrgus: väikeelamul 9 m\n"
+            "maapinnast 7\n"
+            "Korruselisus: vaikeelamul 2, kortermajal kuni 3\n"
+        ),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+
+    assert result.fields["lubatud_korrused"].value == (
+        "vaikeelamul 2, kortermajal kuni 3"
+    )
+    assert result.fields["lubatud_korrused"].value != 7
+
+
+def test_regex_extracts_roof_pitch_alternatives_and_kinnistu_size(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=4,
+        text=(
+            "Raudtee tn 109 kinnistu on suurusega 1421 m². "
+            "Maksimaalseks täisehituseks võib olla 17%\n"
+            "Planeeritud kruntide sihtotstarve ja suurus:\n"
+            "Raudtee tn 109 krundile antud maa kasutamise sihtotstarve "
+            "(elamumaa) ei näe ette\n"
+            "Katusekalle\n"
+            "0-13 ˚ või 45-48\n"
+        ),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+    fields = result.fields
+
+    assert fields["krundi_pind_m2"].value == 1421
+    assert fields["kasutusotstarve"].value == "elamumaa"
+    assert fields["katusekalle"].value == "0-13 või 45-48"
+
+
+def test_regex_preserves_all_candidates_and_marks_conflict(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=1,
+        text="Täisehitus 25%\nTäisehitus 30%\n",
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+    field = result.fields["taisehitus_pct"]
+
+    assert field.value is None
+    assert [candidate.value for candidate in field.candidates] == [25, 30]
+    assert field.candidates[0].rank == 1
+    assert field.candidates[0].quality == "strong"
+    assert field.candidates[0].score is not None
+    assert field.needs_review
+
+
+def test_strong_single_candidate_fills_direct_value(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=1,
+        text="Krundi ehitusõigus\nLubatud suurim täisehitus 25%\n",
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+    field = result.fields["taisehitus_pct"]
+
+    assert field.value == 25
+    assert field.candidates[0].quality == "strong"
+    assert field.candidates[0].context
+
+
+def test_floor_false_positive_is_not_direct_value(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=3,
+        text=(
+            "Kontaktvööndis on erinevaid kõrgusi ja mahte.\n"
+            "Suurem korruselisus avaks huvitavad vaated kõikidesse ilmakaartesse.\n"
+        ),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+    field = result.fields["lubatud_korrused"]
+
+    assert field.value is None
+    assert field.candidates == []
+    assert field.needs_review
+
+
+def test_table_like_floor_candidate_is_kept_and_selected(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=3,
+        text=(
+            "Krundi ehitusõigus\n"
+            "Hoonete suurim lubatud maapealne korruselisus\n"
+            "4 (hoone I)\n"
+            "Hoonete suurim lubatud maa-alune korruselisus\n"
+            "-1 (hoone I)\n"
+        ),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+    field = result.fields["lubatud_korrused"]
+
+    assert field.value == "4 (hoone I)"
+    assert any(candidate.raw_value == "4 (hoone I)" for candidate in field.candidates)
+    assert any(
+        "underground_floor_context" in candidate.flags for candidate in field.candidates
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Piirdeaia maksimaalne kõrgus maapinnast on 1,5 m.\n",
+        "Krundid piirata traatvõrkaiaga (kõrgus kuni 2,0m).\n",
+    ],
+)
+def test_fence_height_candidate_is_not_direct_building_height(tmp_path, text):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=5,
+        text=text,
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+    field = result.fields["hoonete_lubatud_korgused_m"]
+
+    assert field.value is None
+    assert field.candidates
+    assert field.candidates[0].quality == "weak"
+    assert "not_building_height" in field.candidates[0].flags
+
+
+def test_maximum_building_height_beats_fence_height_candidate(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=5,
+        text=(
+            "Paariselamu maksimaalne kõrgus olemasolevast maapinnast "
+            "katuseharjale on 8,5m.\n"
+            "Piire: puidust või võrgust, kõrgusega kuni 1,5m.\n"
+        ),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+    field = result.fields["hoonete_lubatud_korgused_m"]
+
+    assert field.value == "8,5"
+    assert any(candidate.value == "8,5" for candidate in field.candidates)
+    fence_candidates = [
+        candidate for candidate in field.candidates if candidate.value == "1,5"
+    ]
+    assert fence_candidates
+    assert fence_candidates[0].quality == "weak"
+    assert "not_building_height" in fence_candidates[0].flags
+
+
+def test_cadastre_context_fills_missing_area_land_use_and_ownership():
+    result = extract_building_rights(
+        [],
+        parcel_attributes={
+            "tunnus": "78404:407:0017",
+            "pindala": 1424,
+            "siht1": "ELAMUMAA",
+            "so_prts1": 100,
+            "omvorm": "Eraomand",
+        },
+    )
+    fields = result.fields
+
+    assert fields["krundi_pind_m2"].value == 1424
+    assert fields["krundi_pind_m2"].source_type == "cadastre"
+    assert fields["kasutusotstarve"].value == "elamumaa 100%"
+    assert fields["omandivorm"].value == "Eraomand"
+
+
+def test_cadastre_land_use_and_ownership_skip_regex_when_context_exists(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=1,
+        text=("Sihtotstarve: on elamumaa.\n" "Omandivorm: avalik tekst\n"),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights(
+        [chunk],
+        parcel_attributes={
+            "siht1": "ELAMUMAA",
+            "so_prts1": 75,
+            "siht2": "ARIMAA",
+            "so_prts2": 25,
+            "omvorm": "Eraomand",
+        },
+    )
+
+    assert result.fields["kasutusotstarve"].value == "elamumaa 75%, arimaa 25%"
+    assert result.fields["kasutusotstarve"].source_type == "cadastre"
+    assert len(result.fields["kasutusotstarve"].candidates) == 1
+    assert result.fields["kasutusotstarve"].needs_review == []
+    assert result.fields["omandivorm"].value == "Eraomand"
+    assert result.fields["omandivorm"].source_type == "cadastre"
+
+
+def test_pdf_area_is_preferred_when_close_to_cadastre_and_derived_values_verify(
+    tmp_path,
+):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=3,
+        text=(
+            "Raudtee tn 109 kinnistu on suurusega 1421 m². "
+            "Maksimaalseks täisehituseks võib olla 17%\n"
+            "ehitusalune pind võib olla kuni 241 m².\n"
+        ),
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights(
+        [chunk],
+        parcel_attributes={"pindala": 1424},
+    )
+    fields = result.fields
+
+    assert fields["krundi_pind_m2"].value == 1421
+    assert fields["krundi_pind_m2"].source_type == "regex"
+    assert any(
+        candidate.source_type == "cadastre"
+        for candidate in fields["krundi_pind_m2"].candidates
+    )
+    assert fields["ehitusalune_pind_m2"].value == 241
+    assert not fields["ehitusalune_pind_m2"].needs_review
+    assert not fields["taisehitus_pct"].needs_review
+
+
+def test_missing_footprint_and_coverage_are_derived(tmp_path):
+    footprint_missing = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=1,
+        text="Krundi pind 1000 m²\nTäisehitus 25%\n",
+        score=10,
+        reasons=["test"],
+    )
+    footprint_result = extract_building_rights([footprint_missing])
+
+    assert footprint_result.fields["ehitusalune_pind_m2"].value == 250
+    assert footprint_result.fields["ehitusalune_pind_m2"].source_type == "derived"
+
+    coverage_missing = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=2,
+        text="Krundi pind 1000 m²\nEhitusalune pind 250 m²\n",
+        score=10,
+        reasons=["test"],
+    )
+    coverage_result = extract_building_rights([coverage_missing])
+
+    assert coverage_result.fields["taisehitus_pct"].value == 25
+    assert coverage_result.fields["taisehitus_pct"].source_type == "derived"
+
+
+def test_building_count_derives_from_safe_floor_building_type_text(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=4,
+        text="Korruselisus\nElamu 2, abihoone 1\n",
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+
+    assert result.fields["lubatud_majade_ehitamise_arv"].value == 2
+    assert result.fields["lubatud_majade_ehitamise_arv"].source_type == "derived"
+    assert result.fields["hoonete_arv"].value == 2
+
+
+def test_building_count_is_not_derived_from_ambiguous_floor_alternatives(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=2,
+        text="Korruselisus: väikeelamul 2, kortermajal kuni 3\n",
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights([chunk])
+
+    assert result.fields["lubatud_majade_ehitamise_arv"].value is None
+    assert result.fields["hoonete_arv"].value is None
+
+
+def test_analyze_pdfs_returns_direct_regex_response(monkeypatch, tmp_path):
     pdf_path = tmp_path / "plan.pdf"
     page = PageText(
         pdf_path=pdf_path,
         page=3,
         text=(
-            "Kaupmehe tn 19 krundi suurus 1000 m2\n"
+            "Kaupmehe tn 19 krundi pind 1000 m2\n"
             "Täisehitus 25%\n"
+            "Ehitusalune pind 250 m2\n"
+            "Korruselisus 2\n"
             "Hoonete arv 1\n"
+            "Katuse kalle 0-45\n"
+            "Tulepüsivusklass TP-3\n"
         ),
         normalized_text=(
-            "Kaupmehe tn 19 krundi suurus 1000 m2\n"
+            "Kaupmehe tn 19 krundi pind 1000 m2\n"
             "Täisehitus 25%\n"
+            "Ehitusalune pind 250 m2\n"
+            "Korruselisus 2\n"
             "Hoonete arv 1\n"
+            "Katuse kalle 0-45\n"
+            "Tulepüsivusklass TP-3\n"
         ),
-    )
-    llm_response = StructuredLLMResponse(
-        building_right=LLMBuildingRight(
-            site_coverage_pct=LLMValue(
-                value=40,
-                page=3,
-                evidence_text="Täisehitus 40%",
-            )
-        )
     )
 
     monkeypatch.setattr(analyzer, "check_ocr_runtime", lambda: OCRRuntime([], set()))
@@ -188,104 +505,46 @@ def test_analyze_pdfs_computes_derived_field_and_flags_conflict(monkeypatch, tmp
         "prepare_pdf_for_text",
         lambda raw_pdf, runtime=None, force_refresh=False: (raw_pdf, False),
     )
-    monkeypatch.setattr(analyzer, "extract_pages", lambda working_pdf: [page])
-    monkeypatch.setattr(analyzer, "chunks_with_llm_text", lambda chunks: chunks)
     monkeypatch.setattr(
         analyzer,
-        "analyze_with_local_llm",
-        lambda address, chunks: llm_response,
+        "extract_pages_cached",
+        lambda working_pdf, force_refresh=False: [page],
     )
 
     response = analyzer.analyze_pdfs([pdf_path], "Kaupmehe tn 19")
-    building_facts = response.sections["ehitamise_pohioigus"].found_in_pdf
 
-    assert response.status == AnalysisStatus.PARTIAL
-    assert any(
-        fact.key == "ehitisealune_pind_tuletatud" and fact.value == 250
-        for fact in building_facts
-    )
-    assert any(
-        item.key == "taisehitus"
-        for item in response.sections["ehitamise_pohioigus"].needs_review
-    )
-
-
-def test_ollama_invalid_json_gets_one_repair_attempt(monkeypatch):
-    calls = []
-    valid_payload = {
-        "summary": "Kokkuvõte",
-        "building_right": {},
-        "architecture": [],
-        "landscaping_environment": [],
-        "access_parking": [],
-        "utilities": [],
-        "servitudes_restrictions": [],
-        "missing_or_needs_review": [],
-        "buyer_risks": [],
-    }
-
-    class FakeResponse:
-        def __init__(self, content):
-            self.content = content
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"message": {"content": self.content}}
-
-    def fake_post(*args, **kwargs):
-        calls.append((args, kwargs))
-        if len(calls) == 1:
-            return FakeResponse("not json")
-        return FakeResponse(__import__("json").dumps(valid_payload))
-
-    class FakeTagsResponse:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"models": [{"name": "qwen3:8b"}]}
-
-    monkeypatch.setattr(llm.httpx, "post", fake_post)
-    monkeypatch.setattr(llm.httpx, "get", lambda *args, **kwargs: FakeTagsResponse())
-
-    result = llm.analyze_with_local_llm(
-        "Kaupmehe tn 19",
-        [TextChunk(Path("plan.pdf"), 1, "tekst", 1, ["test"])],
-        model="qwen3:8b",
-        base_url="http://ollama.test",
-    )
-
-    assert result.summary == "Kokkuvõte"
-    assert len(calls) == 2
-
-
-def test_ollama_http_error_is_unavailable(monkeypatch):
-    def fake_post(*args, **kwargs):
-        raise httpx.ConnectError("no server")
-
-    monkeypatch.setattr(llm.httpx, "post", fake_post)
-
-    with pytest.raises(llm.LLMUnavailable):
-        llm.analyze_with_local_llm(
-            "Kaupmehe tn 19",
-            [TextChunk(Path("plan.pdf"), 1, "tekst", 1, ["test"])],
-        )
+    assert response.building_right.fields["krundi_pind_m2"].value == 1000
+    assert response.building_right.fields["taisehitus_pct"].value == 25
+    candidate_dump = response.model_dump(mode="json")["building_right"]["fields"][
+        "taisehitus_pct"
+    ]["candidates"][0]
+    assert candidate_dump["rank"] == 1
+    assert candidate_dump["quality"] == "strong"
+    assert candidate_dump["score"] is not None
+    assert candidate_dump["context"]
+    assert "llm_status" not in response.meta.model_dump()
+    assert "analysis_id" not in response.meta.model_dump()
 
 
 def test_detail_plan_analysis_api_uses_highest_overlap_and_returns_json(monkeypatch):
+    captured: dict = {}
     parcel = Parcel(
         gpd.GeoDataFrame(
-            [{"l_aadress": "Kaupmehe tn 19", "geometry": Point(0, 0)}],
+            [
+                {
+                    "l_aadress": "Kaupmehe tn 19",
+                    "pindala": 1000,
+                    "siht1": "ELAMUMAA",
+                    "geometry": Point(0, 0),
+                }
+            ],
             crs="EPSG:3301",
         )
     )
     expected = DetailPlanAnalysisResponse(
-        status=AnalysisStatus.LLM_UNAVAILABLE,
+        status=AnalysisStatus.PARTIAL,
         meta=DetailPlanMeta(address="Kaupmehe tn 19"),
-        sections=analyzer.default_sections(),
-        setup_issues=["Ollama analysis unavailable"],
+        building_right=analyzer.empty_building_right(),
     )
 
     monkeypatch.setattr(
@@ -296,19 +555,27 @@ def test_detail_plan_analysis_api_uses_highest_overlap_and_returns_json(monkeypa
         "highest_overlap_detail_plan",
         lambda parcel: {"sysid": "1", "failid": "https://example.test/files"},
     )
-    monkeypatch.setattr(
-        api,
-        "analyze_detail_plan",
-        lambda detail_plan, address, force_refresh=False: expected,
-    )
+
+    def fake_analyze_detail_plan(
+        detail_plan,
+        address,
+        parcel_attributes=None,
+        force_refresh=False,
+    ):
+        captured["parcel_attributes"] = parcel_attributes
+        return expected
+
+    monkeypatch.setattr(api, "analyze_detail_plan", fake_analyze_detail_plan)
 
     response = api.return_detail_plan_analysis(
         type="cadastre_code",
         searchable="123",
     )
 
-    assert response["status"] == "llm_unavailable"
+    assert response["status"] == "partial"
     assert response["meta"]["address"] == "Kaupmehe tn 19"
+    assert "llm_status" not in response["meta"]
+    assert captured["parcel_attributes"]["pindala"] == 1000
 
 
 def test_detail_plan_analysis_api_returns_404_when_no_detail_plan(monkeypatch):
@@ -322,6 +589,16 @@ def test_detail_plan_analysis_api_returns_404_when_no_detail_plan(monkeypatch):
     monkeypatch.setattr(api, "highest_overlap_detail_plan", lambda parcel: None)
 
     with pytest.raises(HTTPException) as exc_info:
-        api.return_detail_plan_analysis(type="address", searchable="Kaupmehe tn 19")
+        api.return_detail_plan_analysis(
+            type="address",
+            searchable="Kaupmehe tn 19",
+        )
 
     assert exc_info.value.status_code == 404
+
+
+def test_detail_plan_analysis_api_returns_400_for_invalid_type():
+    with pytest.raises(HTTPException) as exc_info:
+        api.return_detail_plan_analysis(type="bad", searchable="Kaupmehe tn 19")
+
+    assert exc_info.value.status_code == 400

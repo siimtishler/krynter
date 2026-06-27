@@ -18,6 +18,9 @@ class Config(BaseSettings):
     restriction_areas_file: Path = DATA_DIR / "restriction_areas.gpkg"
     detail_plans_file: Path = DATA_DIR / "detail_plans_tln.gpkg"
     detail_plan_download_dir: Path = DATA_DIR / "detail_downloads"
+    detail_plan_analysis_cache_dir: Path = (
+        DATA_DIR / "detail_downloads" / "_analysis_cache"
+    )
 
 
 config = Config()

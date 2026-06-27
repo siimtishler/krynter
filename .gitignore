@@ -6,5 +6,6 @@
 __pycache__
 frontend/node_modules
 data/*
+data_backup/*
 frontend/dist
 experiments/

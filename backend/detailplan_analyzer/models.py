@@ -1,9 +1,9 @@
-"""Pydantic models for detail-planning PDF analysis."""
+"""Pydantic models for regex-only detail-planning PDF analysis."""
 
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -12,11 +12,14 @@ class AnalysisStatus(StrEnum):
     OK = "ok"
     PARTIAL = "partial"
     NEEDS_SETUP = "needs_setup"
-    LLM_UNAVAILABLE = "llm_unavailable"
     NOT_FOUND = "not_found"
 
 
-SourceType = Literal["regex", "llm", "derived", "pdf", "system"]
+class SourceType(StrEnum):
+    REGEX = "regex"
+    PDF = "pdf"
+    CADASTRE = "cadastre"
+    DERIVED = "derived"
 
 
 class Evidence(BaseModel):
@@ -25,14 +28,22 @@ class Evidence(BaseModel):
     text: str
 
 
-class Fact(BaseModel):
-    key: str
+class RegexCandidate(BaseModel):
+    field_key: str
     label: str
     value: Any = None
+    raw_value: str
     unit: str | None = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    source_type: SourceType
-    evidence: Evidence | None = None
+    source_type: SourceType = SourceType.REGEX
+    pattern_name: str
+    evidence: Evidence
+    rank: int | None = None
+    score: float | None = None
+    quality: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+    flags: list[str] = Field(default_factory=list)
+    context: str | None = None
 
 
 class ReviewItem(BaseModel):
@@ -41,9 +52,21 @@ class ReviewItem(BaseModel):
     evidence: Evidence | None = None
 
 
-class AnalysisSection(BaseModel):
-    title: str
-    found_in_pdf: list[Fact] = Field(default_factory=list)
+class ExtractedField(BaseModel):
+    key: str
+    label: str
+    value: Any = None
+    unit: str | None = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    source_type: SourceType | None = None
+    evidence: Evidence | None = None
+    candidates: list[RegexCandidate] = Field(default_factory=list)
+    needs_review: list[ReviewItem] = Field(default_factory=list)
+
+
+class BuildingRightSection(BaseModel):
+    title: str = "Ehitamise põhiõigus"
+    fields: dict[str, ExtractedField] = Field(default_factory=dict)
     needs_review: list[ReviewItem] = Field(default_factory=list)
 
 
@@ -56,9 +79,9 @@ class SourceReference(BaseModel):
 class DetailPlanMeta(BaseModel):
     address: str
     detail_plan: dict[str, Any] = Field(default_factory=dict)
+    parcel_context: dict[str, Any] = Field(default_factory=dict)
     source_pdfs: list[str] = Field(default_factory=list)
     ocr_used: bool = False
-    ollama_model: str | None = None
     chunks_sent: int = 0
     cache_dir: str | None = None
 
@@ -66,41 +89,6 @@ class DetailPlanMeta(BaseModel):
 class DetailPlanAnalysisResponse(BaseModel):
     status: AnalysisStatus
     meta: DetailPlanMeta
-    sections: dict[str, AnalysisSection]
+    building_right: BuildingRightSection
     sources: list[SourceReference] = Field(default_factory=list)
     setup_issues: list[str] = Field(default_factory=list)
-
-
-class LLMClaim(BaseModel):
-    text: str
-    page: int | None = None
-    evidence_text: str | None = None
-    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
-
-
-class LLMValue(BaseModel):
-    value: Any = None
-    page: int | None = None
-    evidence_text: str | None = None
-    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
-
-
-class LLMBuildingRight(BaseModel):
-    parcel_area_m2: LLMValue = Field(default_factory=LLMValue)
-    use_purpose: LLMValue = Field(default_factory=LLMValue)
-    floors: LLMValue = Field(default_factory=LLMValue)
-    site_coverage_pct: LLMValue = Field(default_factory=LLMValue)
-    height_m: LLMValue = Field(default_factory=LLMValue)
-    building_count: LLMValue = Field(default_factory=LLMValue)
-
-
-class StructuredLLMResponse(BaseModel):
-    summary: str | None = None
-    building_right: LLMBuildingRight = Field(default_factory=LLMBuildingRight)
-    architecture: list[LLMClaim] = Field(default_factory=list)
-    landscaping_environment: list[LLMClaim] = Field(default_factory=list)
-    access_parking: list[LLMClaim] = Field(default_factory=list)
-    utilities: list[LLMClaim] = Field(default_factory=list)
-    servitudes_restrictions: list[LLMClaim] = Field(default_factory=list)
-    missing_or_needs_review: list[str] = Field(default_factory=list)
-    buyer_risks: list[LLMClaim] = Field(default_factory=list)

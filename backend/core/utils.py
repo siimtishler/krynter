@@ -18,7 +18,7 @@ def time_function(fn):
             raise
         else:
             time_after = time_ns()
-            logger.exception(
+            logger.debug(
                 f"{fn.__name__} spent time {((time_after - time_before) / 1e6):.2f} ms",
             )
             return ret_val

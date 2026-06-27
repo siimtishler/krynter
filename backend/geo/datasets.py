@@ -37,7 +37,7 @@ def load_gpkg_file(filename: Path | str) -> gpd.GeoDataFrame:
     try:
         return gpd.read_file(filename=filename)
     except Exception:
-        logger.exception("Failed to load GeoPackage file %s", filename)
+        logger.exception(f"Failed to load GeoPackage file {filename}")
         raise
 
 

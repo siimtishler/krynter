@@ -11,6 +11,9 @@ from backend.geo import (
     find_parcel_by_address,
     find_parcel_by_cadastre_code,
 )
+from backend.geo.constants import DETAIL_PLAN_RESPONSE_COLUMNS
+from backend.geo.datasets import get_detail_plans
+from backend.geo.serializers import row_to_geojson_dict
 
 router = APIRouter()
 
@@ -50,10 +53,8 @@ def return_detail_plan_analysis(
     force_refresh: bool = False,
 ):
     logger.info(
-        "detail-plan-analysis request type=%s searchable=%s force_refresh=%s",
-        type,
-        searchable,
-        force_refresh,
+        f"detail-plan-analysis request type={type} searchable={searchable} "
+        f"force_refresh={force_refresh}"
     )
     if type == "address":
         parcel: Parcel | None = find_parcel_by_address(address=searchable)
@@ -65,7 +66,8 @@ def return_detail_plan_analysis(
     if parcel is None:
         raise HTTPException(status_code=404, detail="Parcel not found")
 
-    address = parcel.attributes().get("l_aadress") or searchable
+    parcel_attributes = parcel.attributes()
+    address = parcel_attributes.get("l_aadress") or searchable
     detail_plan = highest_overlap_detail_plan(parcel)
     if detail_plan is None:
         raise HTTPException(status_code=404, detail="Detail plan not found")
@@ -73,15 +75,34 @@ def return_detail_plan_analysis(
     result = analyze_detail_plan(
         detail_plan=detail_plan,
         address=address,
+        parcel_attributes=parcel_attributes,
         force_refresh=force_refresh,
     )
     logger.info(
-        "detail-plan-analysis response status=%s chunks=%s setup_issues=%s",
-        result.status,
-        result.meta.chunks_sent,
-        result.setup_issues,
+        f"detail-plan-analysis response status={result.status} "
+        f"chunks={result.meta.chunks_sent} setup_issues={result.setup_issues}"
     )
     return result.model_dump(mode="json")
+
+
+@router.get("/detail-plans/geojson")
+def return_detail_plans_geojson():
+    detail_plans = get_detail_plans()
+    features = []
+    for _, row in detail_plans.iterrows():
+        serialized = row_to_geojson_dict(row, DETAIL_PLAN_RESPONSE_COLUMNS)
+        geometry = serialized.pop("geometry")
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": geometry,
+                "properties": serialized,
+            }
+        )
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+    }
 
 
 @router.get("/nearby_pois")

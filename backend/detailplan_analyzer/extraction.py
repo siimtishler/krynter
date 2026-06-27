@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import contextlib
-import io
-import os
+import hashlib
+import json
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import fitz
 
+from backend.core.config import config
 from backend.core.logging import logger
 from backend.core.utils import time_function
 from backend.detailplan_analyzer.models import Evidence
@@ -19,6 +19,7 @@ from backend.detailplan_analyzer.pdfs import OCRRuntime, run_ocr
 TOPIC_KEYWORDS = {
     "krunt": 2,
     "krundi suurus": 6,
+    "krundi pind": 6,
     "pindala": 4,
     "sihtotstarve": 5,
     "kasutusotstarve": 5,
@@ -26,20 +27,14 @@ TOPIC_KEYWORDS = {
     "täisehitus": 7,
     "ehitisealune": 6,
     "ehitusalune": 6,
+    "brutopind": 5,
+    "bruto pind": 5,
     "kõrgus": 4,
     "hoonete arv": 6,
-    "arhitektuur": 4,
-    "haljastus": 4,
-    "keskkond": 2,
-    "juurdepääs": 4,
-    "parkim": 4,
-    "tehnovõrk": 5,
-    "veevarustus": 3,
-    "kanalisatsioon": 3,
-    "elekter": 3,
-    "servituut": 5,
-    "kitsendus": 5,
-    "kaitsevöönd": 4,
+    "katuse": 4,
+    "katusekalle": 5,
+    "tulepüsivus": 5,
+    "tp-": 4,
 }
 
 
@@ -58,6 +53,80 @@ class TextChunk:
     text: str
     score: int
     reasons: list[str]
+    field_key: str | None = None
+
+
+FIELD_WINDOW_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "krundi_pind_m2": (
+        "krundi pind",
+        "krundi pindala",
+        "krundi suurus",
+        "kinnistu suurus",
+        "maaüksuse pindala",
+        "pindala",
+    ),
+    "taisehitus_pct": (
+        "täisehitus",
+        "täisehituse",
+        "hoonestustihedus",
+    ),
+    "brutopind_m2": (
+        "brutopind",
+        "bruto pind",
+        "suletud brutopind",
+    ),
+    "ehitusalune_pind_m2": (
+        "ehitusalune pind",
+        "ehitisealune pind",
+        "hoonete alune pind",
+    ),
+    "lubatud_korrused": (
+        "korruselisus",
+        "korruste arv",
+        "maapealne korruselisus",
+        "maa-alune korruselisus",
+        "korruseline",
+        "korrust",
+    ),
+    "lubatud_majade_ehitamise_arv": (
+        "lubatud hoonete arv",
+        "lubatud majade arv",
+        "lubatud ehitada",
+    ),
+    "hoonete_lubatud_korgused_m": (
+        "hoonestuse kõrgus",
+        "hoone kõrgus",
+        "maksimaalne kõrgus",
+        "suurim kõrgus",
+        "lubatud kõrgus",
+    ),
+    "hoonete_arv": (
+        "hoonete arv",
+        "planeeritud hoonet",
+        "hoonete suurim lubatud arv",
+    ),
+    "kasutusotstarve": (
+        "sihtotstarve",
+        "kasutusotstarve",
+        "maa kasutamise sihtotstarve",
+    ),
+    "katusekalle": (
+        "katusekalle",
+        "katuse kalle",
+    ),
+    "tulepusivusklass": (
+        "tulepüsivus",
+        "tulepüsivusklass",
+        "tulepüsivusaste",
+        "tp-",
+    ),
+    "omandivorm": (
+        "omandivorm",
+        "eraomand",
+        "munitsipaalomand",
+        "riigiomand",
+    ),
+}
 
 
 def normalize_planning_text(text: str) -> str:
@@ -70,6 +139,44 @@ def normalize_planning_text(text: str) -> str:
     return "\n".join(lines)
 
 
+def _pdf_fingerprint(pdf_path: Path) -> str:
+    stat = pdf_path.stat()
+    payload = "|".join(
+        [
+            str(pdf_path.resolve()),
+            str(stat.st_mtime_ns),
+            str(stat.st_size),
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _page_cache_path(pdf_path: Path) -> Path:
+    return (
+        config.detail_plan_analysis_cache_dir
+        / "pages"
+        / f"{_pdf_fingerprint(pdf_path)}.json"
+    )
+
+
+def _serialize_page(page: PageText) -> dict:
+    return {
+        "pdf_path": str(page.pdf_path),
+        "page": page.page,
+        "text": page.text,
+        "normalized_text": page.normalized_text,
+    }
+
+
+def _deserialize_page(payload: dict) -> PageText:
+    return PageText(
+        pdf_path=Path(payload["pdf_path"]),
+        page=payload["page"],
+        text=payload["text"],
+        normalized_text=payload["normalized_text"],
+    )
+
+
 @time_function
 def pdf_has_text(pdf_path: Path, min_chars: int = 100) -> bool:
     try:
@@ -79,18 +186,14 @@ def pdf_has_text(pdf_path: Path, min_chars: int = 100) -> bool:
                 text_len += len(document.load_page(page_index).get_text("text").strip())
                 if text_len >= min_chars:
                     logger.debug(
-                        "PDF has text pdf=%s sampled_pages=%s sampled_chars=%s",
-                        pdf_path,
-                        page_index + 1,
-                        text_len,
+                        f"PDF has text pdf={pdf_path} "
+                        f"sampled_pages={page_index + 1} sampled_chars={text_len}"
                     )
                     return True
     except Exception:
-        logger.exception("Failed checking PDF text pdf=%s", pdf_path)
+        logger.exception(f"Failed checking PDF text pdf={pdf_path}")
         return False
-    logger.debug(
-        "PDF has insufficient text pdf=%s sampled_chars=%s", pdf_path, text_len
-    )
+    logger.debug(f"PDF has insufficient text pdf={pdf_path} sampled_chars={text_len}")
     return False
 
 
@@ -101,15 +204,15 @@ def prepare_pdf_for_text(
     force_refresh: bool = False,
 ) -> tuple[Path, bool]:
     if pdf_has_text(pdf_path):
-        logger.debug("Using embedded PDF text pdf=%s", pdf_path)
+        logger.debug(f"Using embedded PDF text pdf={pdf_path}")
         return pdf_path, False
 
     ocr_pdf = pdf_path.with_name(f"{pdf_path.stem}_ocr.pdf")
     if not force_refresh and ocr_pdf.exists() and pdf_has_text(ocr_pdf):
-        logger.debug("Using cached OCR PDF raw_pdf=%s ocr_pdf=%s", pdf_path, ocr_pdf)
+        logger.debug(f"Using cached OCR PDF raw_pdf={pdf_path} ocr_pdf={ocr_pdf}")
         return ocr_pdf, True
 
-    logger.info("PDF needs OCR pdf=%s", pdf_path)
+    logger.info(f"PDF needs OCR pdf={pdf_path}")
     return run_ocr(pdf_path, ocr_pdf, runtime), True
 
 
@@ -130,12 +233,41 @@ def extract_pages(pdf_path: Path) -> list[PageText]:
     non_empty = sum(1 for page in pages if page.normalized_text.strip())
     total_chars = sum(len(page.normalized_text) for page in pages)
     logger.debug(
-        "Extracted pages pdf=%s page_count=%s non_empty_pages=%s normalized_chars=%s",
-        pdf_path,
-        len(pages),
-        non_empty,
-        total_chars,
+        f"Extracted pages pdf={pdf_path} page_count={len(pages)} "
+        f"non_empty_pages={non_empty} normalized_chars={total_chars}"
     )
+    return pages
+
+
+@time_function
+def extract_pages_cached(pdf_path: Path, force_refresh: bool = False) -> list[PageText]:
+    cache_path = _page_cache_path(pdf_path)
+    if not force_refresh and cache_path.exists():
+        try:
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+            pages = [_deserialize_page(item) for item in payload["pages"]]
+            logger.debug(
+                f"Using cached page text pdf={pdf_path} cache={cache_path} "
+                f"page_count={len(pages)}"
+            )
+            return pages
+        except (KeyError, TypeError, json.JSONDecodeError):
+            logger.exception(f"Failed reading page text cache cache={cache_path}")
+
+    pages = extract_pages(pdf_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(
+        json.dumps(
+            {
+                "pdf_path": str(pdf_path),
+                "fingerprint": _pdf_fingerprint(pdf_path),
+                "pages": [_serialize_page(page) for page in pages],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    logger.debug(f"Cached page text pdf={pdf_path} cache={cache_path}")
     return pages
 
 
@@ -188,11 +320,8 @@ def select_relevant_chunks(
 ) -> list[TextChunk]:
     variants = address_variants(address)
     logger.debug(
-        "Selecting chunks address=%s variants=%s page_count=%s max_chunks=%s",
-        address,
-        variants,
-        len(pages),
-        max_chunks,
+        f"Selecting chunks address={address} variants={variants} "
+        f"page_count={len(pages)} max_chunks={max_chunks}"
     )
     scored = [
         (page, *_page_score(page, variants))
@@ -226,72 +355,104 @@ def select_relevant_chunks(
         )
         for page, score, reasons in candidates[:max_chunks]
     ]
+    selected_chunks = [
+        {
+            "pdf": chunk.pdf_path.name,
+            "page": chunk.page,
+            "score": chunk.score,
+            "reasons": chunk.reasons,
+            "chars": len(chunk.text),
+            "snippet": chunk.text[:220],
+        }
+        for chunk in chunks
+    ]
     logger.debug(
-        "Selected chunks: %s",
-        [
-            {
-                "pdf": chunk.pdf_path.name,
-                "page": chunk.page,
-                "score": chunk.score,
-                "reasons": chunk.reasons,
-                "chars": len(chunk.text),
-                "snippet": chunk.text[:220],
-            }
-            for chunk in chunks
-        ],
+        f"Selected chunks: {selected_chunks}",
     )
     return chunks
 
 
-def markdown_for_page(pdf_path: Path, page: int) -> str:
-    try:
-        import pymupdf4llm
-
-        with _suppress_parser_output():
-            markdown = pymupdf4llm.to_markdown(str(pdf_path), pages=[page - 1])
-        if isinstance(markdown, str) and markdown.strip():
-            return normalize_planning_text(markdown)
-    except Exception:
-        pass
-    return ""
-
-
-@contextlib.contextmanager
-def _suppress_parser_output():
-    stdout_buffer = io.StringIO()
-    stderr_buffer = io.StringIO()
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    stdout_fd = os.dup(1)
-    stderr_fd = os.dup(2)
-    try:
-        os.dup2(devnull, 1)
-        os.dup2(devnull, 2)
-        with (
-            contextlib.redirect_stdout(stdout_buffer),
-            contextlib.redirect_stderr(stderr_buffer),
-        ):
-            yield
-    finally:
-        os.dup2(stdout_fd, 1)
-        os.dup2(stderr_fd, 2)
-        os.close(stdout_fd)
-        os.close(stderr_fd)
-        os.close(devnull)
+def _field_window_score(text: str, keyword: str) -> int:
+    low = text.lower()
+    score = 30
+    if keyword in low:
+        score += 10
+    for boost in (
+        "ehitusõigus",
+        "hoonestustingimused",
+        "krundi ehitusõigus",
+        "põhinäitajad",
+        "lubatud",
+        "suurim",
+        "maksimaalne",
+    ):
+        if boost in low:
+            score += 6
+    if "sisukord" in low or text.count("....") > 3:
+        score -= 25
+    return score
 
 
 @time_function
-def chunks_with_llm_text(chunks: list[TextChunk]) -> list[TextChunk]:
-    llm_chunks: list[TextChunk] = []
-    for chunk in chunks:
-        markdown = markdown_for_page(chunk.pdf_path, chunk.page)
-        llm_chunks.append(replace(chunk, text=(markdown or chunk.text)[:10000]))
-    logger.debug(
-        "Prepared LLM chunks count=%s total_chars=%s pages=%s",
-        len(llm_chunks),
-        sum(len(chunk.text) for chunk in llm_chunks),
-        [(chunk.pdf_path.name, chunk.page) for chunk in llm_chunks],
-    )
-    return llm_chunks
+def select_field_evidence_chunks(
+    pages: list[PageText],
+    max_windows_per_field: int = 4,
+    context_lines: int = 3,
+    max_chars: int = 1200,
+) -> list[TextChunk]:
+    chunks: list[TextChunk] = []
+    for field_key, keywords in FIELD_WINDOW_KEYWORDS.items():
+        field_chunks: list[TextChunk] = []
+        seen: set[tuple[str, int, str]] = set()
+        for page in pages:
+            lines = page.normalized_text.splitlines()
+            if not lines:
+                continue
+            low_lines = [line.lower() for line in lines]
+            for index, low_line in enumerate(low_lines):
+                keyword = next(
+                    (item for item in keywords if item in low_line),
+                    None,
+                )
+                if keyword is None:
+                    continue
+
+                start = max(0, index - context_lines)
+                end = min(len(lines), index + context_lines + 1)
+                text = "\n".join(lines[start:end]).strip()[:max_chars]
+                normalized_key = re.sub(r"\s+", " ", text.lower())[:700]
+                key = (page.pdf_path.name, page.page, normalized_key)
+                if not text or key in seen:
+                    continue
+                seen.add(key)
+                field_chunks.append(
+                    TextChunk(
+                        pdf_path=page.pdf_path,
+                        page=page.page,
+                        text=text,
+                        score=_field_window_score(text, keyword),
+                        reasons=[f"field:{field_key}", f"keyword:{keyword}"],
+                        field_key=field_key,
+                    )
+                )
+
+        field_chunks.sort(key=lambda item: (-item.score, item.pdf_path.name, item.page))
+        chunks.extend(field_chunks[:max_windows_per_field])
+
+    selected = [
+        {
+            "pdf": chunk.pdf_path.name,
+            "page": chunk.page,
+            "field_key": chunk.field_key,
+            "score": chunk.score,
+            "reasons": chunk.reasons,
+            "chars": len(chunk.text),
+            "snippet": chunk.text[:220],
+        }
+        for chunk in chunks
+    ]
+    logger.debug(f"Selected field evidence chunks: {selected}")
+    return chunks
 
 
 def find_address_lines(pages: list[PageText], address: str) -> list[Evidence]:
@@ -309,9 +470,7 @@ def find_address_lines(pages: list[PageText], address: str) -> list[Evidence]:
                     )
                 )
     logger.debug(
-        "Found address lines address=%s count=%s first_matches=%s",
-        address,
-        len(matches),
-        [match.model_dump() for match in matches[:5]],
+        f"Found address lines address={address} count={len(matches)} "
+        f"first_matches={[match.model_dump() for match in matches[:5]]}"
     )
     return matches
