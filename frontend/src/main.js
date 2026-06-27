@@ -5,6 +5,7 @@ import {
     clearNoiseOverlay,
     clearPoiOverlay,
     createMap,
+    focusParcelByTunnus,
     focusPoiOnMap,
     getAddressSuggestions,
     setNoiseOverlay,
@@ -19,6 +20,7 @@ const searchInput = getRequiredElement('search-input', HTMLInputElement)
 const searchSuggestions = getRequiredElement('search-suggestions', HTMLDataListElement)
 const searchSuggestionHint = getRequiredElement('search-suggestion-hint', HTMLButtonElement)
 const resultsPanel = getRequiredElement('results-panel', HTMLElement)
+searchInput.name = `parcel-search-${Date.now()}`
 
 if (SHOW_DEBUG_HTML) {
     document.body.classList.add('debug-enabled')
@@ -201,8 +203,16 @@ function websiteLabel(value) {
         return null
     }
 
-    const text = String(value).trim()
-    return text.length <= 28 ? text : 'koduleht'
+    const href = websiteHref(value)
+    if (!href) {
+        return null
+    }
+
+    try {
+        return new URL(href).hostname.replace(/^www\./i, '')
+    } catch {
+        return String(value).trim().replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0]
+    }
 }
 
 function titleForItem(item) {
@@ -956,6 +966,9 @@ function renderParcelResponse(response, searchValue) {
     if (parcel.l_aadress) {
         searchInput.value = parcel.l_aadress
     }
+    if (parcel.tunnus) {
+        focusParcelByTunnus(map, parcel.tunnus)
+    }
     currentPoiCollection = buildPoiFeatureCollection(response?.nearby_pois)
 
     const dashboard = createElement('div', 'parcel-dashboard')
@@ -976,6 +989,8 @@ async function handleParcelSearch(value) {
 
     searchButton.disabled = true
     searchButton.textContent = 'Otsin'
+    resetPoiOverlay()
+    resetNoiseOverlay()
     resultsPanel.replaceChildren()
     const loading = createElement('div', 'empty-panel')
     appendText(loading, 'p', 'Otsing', 'eyebrow')

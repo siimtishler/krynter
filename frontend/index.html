@@ -13,11 +13,11 @@
   <main class="app-shell">
     <section id="map" aria-label="Kinnistute kaart"></section>
 
-    <form id="search-bar" class="search-card" role="search">
+    <form id="search-bar" class="search-card" role="search" autocomplete="off">
       <label id="search-header" for="search-input">Aadress või katastritunnus</label>
       <div class="search-row">
-        <input id="search-input" type="search" value="P. Kerese tn 5a" autocomplete="street-address"
-          list="search-suggestions">
+        <input id="search-input" type="text" value="P. Kerese tn 5a" autocomplete="off" autocapitalize="off"
+          spellcheck="false" list="search-suggestions">
         <datalist id="search-suggestions"></datalist>
         <button id="search-button" class="primary-button" type="submit">Otsi</button>
       </div>

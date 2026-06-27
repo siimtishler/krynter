@@ -4,6 +4,7 @@ import './styles.css'
 
 import { API_BASE_URL } from '../api/client.js'
 
+const SHOW_DEBUG_HTML = import.meta.env.VITE_SHOW_DEBUG_HTML === 'true'
 const KERESE_CENTER = [24.709819, 59.3795179]
 const DETAIL_PLAN_SOURCE_ID = 'detail-plans'
 const DETAIL_PLAN_FILL_LAYER_ID = 'detail-plan-fill'
@@ -31,6 +32,13 @@ function addMapEvents(map, options) {
     })
 
     map.on("click", "parcel-fill", (event) => {
+        const poiFeatures = map.queryRenderedFeatures(event.point, {
+            layers: [POI_CIRCLE_LAYER_ID, POI_SELECTED_LAYER_ID],
+        })
+        if (poiFeatures.length) {
+            return
+        }
+
         const feature = event.features?.[0]
         if (!feature) {
             console.error("Couldnt get features from parcel");
@@ -132,6 +140,10 @@ function createDetailPlanToggleControl(map) {
         onAdd() {
             const container = document.createElement('div')
             container.className = 'map-layer-control maplibregl-ctrl'
+            container.setAttribute('debug', '')
+            if (!SHOW_DEBUG_HTML) {
+                container.classList.add('debug-hidden')
+            }
 
             const label = document.createElement('label')
             label.className = 'map-layer-control__label'
@@ -322,6 +334,26 @@ function clearPinnedPoiPopup() {
     pinnedPoiPopup = null
 }
 
+function clearSelectedPoi(map) {
+    const source = map.getSource(POI_SELECTED_SOURCE_ID)
+    if (source) {
+        source.setData(emptyFeatureCollection())
+    }
+}
+
+function domainLabel(value) {
+    if (!value) {
+        return ''
+    }
+
+    const href = /^https?:\/\//i.test(value) ? value : `https://${value}`
+    try {
+        return new URL(href).hostname.replace(/^www\./i, '')
+    } catch {
+        return String(value).replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0]
+    }
+}
+
 function createPoiPopupBody(properties) {
     const popupBody = document.createElement('div')
     popupBody.className = 'poi-popup'
@@ -353,7 +385,7 @@ function createPoiPopupBody(properties) {
             : `https://${properties.website}`
         link.target = '_blank'
         link.rel = 'noreferrer'
-        link.textContent = properties.website.length <= 28 ? properties.website : 'koduleht'
+        link.textContent = domainLabel(properties.website)
         popupBody.appendChild(link)
     }
 
@@ -379,6 +411,12 @@ function showPoiPopup(map, feature, pinned = false) {
     if (pinned) {
         clearPinnedPoiPopup()
         pinnedPoiPopup = popup
+        popup.on('close', () => {
+            if (pinnedPoiPopup === popup) {
+                pinnedPoiPopup = null
+                clearSelectedPoi(map)
+            }
+        })
     } else {
         hoverPoiPopup?.remove()
         hoverPoiPopup = popup
@@ -391,10 +429,6 @@ function addPoiEvents(map) {
     })
 
     map.on('mousemove', POI_CIRCLE_LAYER_ID, (event) => {
-        if (pinnedPoiPopup) {
-            return
-        }
-
         const feature = event.features?.[0]
 
         if (!feature) {
@@ -413,6 +447,7 @@ function addPoiEvents(map) {
         if (typeof event.preventDefault === 'function') {
             event.preventDefault()
         }
+        event.originalEvent?.stopPropagation()
         focusPoiOnMap(map, feature)
     })
 
@@ -488,6 +523,59 @@ function addParcelLayers(map) {
     })
 }
 
+function flattenCoordinates(coordinates, result = []) {
+    if (!Array.isArray(coordinates)) {
+        return result
+    }
+
+    if (typeof coordinates[0] === 'number' && typeof coordinates[1] === 'number') {
+        result.push(coordinates)
+        return result
+    }
+
+    for (const child of coordinates) {
+        flattenCoordinates(child, result)
+    }
+
+    return result
+}
+
+function boundsForFeature(feature) {
+    const points = flattenCoordinates(feature?.geometry?.coordinates)
+    if (!points.length) {
+        return null
+    }
+
+    const bounds = new maplibregl.LngLatBounds(points[0], points[0])
+    for (const point of points.slice(1)) {
+        bounds.extend(point)
+    }
+    return bounds
+}
+
+function parcelFeaturesByTunnus(map, tunnus) {
+    if (!tunnus || !map.loaded() || !map.getLayer('parcel-fill')) {
+        return []
+    }
+
+    const rendered = map.queryRenderedFeatures(undefined, {
+        layers: ['parcel-fill'],
+        filter: ['==', ['get', 'tunnus'], tunnus],
+    })
+    if (rendered.length) {
+        return rendered
+    }
+
+    try {
+        return map.querySourceFeatures('tallinn_parcels', {
+            sourceLayer: 'tallinn_parcels',
+            filter: ['==', ['get', 'tunnus'], tunnus],
+        })
+    } catch {
+        return []
+    }
+}
+
 export function createMap(id, options = {}) {
     const map = new maplibregl.Map({
         container: id,
@@ -507,7 +595,7 @@ export function createMap(id, options = {}) {
         ensurePoiLayers(map)
         addPoiEvents(map)
         ensureNoiseLayers(map)
-        map.addControl(createDetailPlanToggleControl(map), 'top-left')
+        map.addControl(createDetailPlanToggleControl(map), 'bottom-left')
     })
 
     return map
@@ -521,6 +609,21 @@ export function setSelectedParcel(map, tunnus) {
         }
         if (map.getLayer('parcel-selected-line')) {
             map.setFilter('parcel-selected-line', filter)
+        }
+    })
+}
+
+export function focusParcelByTunnus(map, tunnus) {
+    runWhenMapReady(map, () => {
+        setSelectedParcel(map, tunnus)
+        const feature = parcelFeaturesByTunnus(map, tunnus)[0]
+        const bounds = boundsForFeature(feature)
+        if (bounds) {
+            map.fitBounds(bounds, {
+                padding: 96,
+                maxZoom: 17,
+                duration: 500,
+            })
         }
     })
 }
@@ -542,10 +645,7 @@ export function clearPoiOverlay(map) {
     })
     runWhenMapReady(map, () => {
         ensurePoiLayers(map)
-        const source = map.getSource(POI_SELECTED_SOURCE_ID)
-        if (source) {
-            source.setData(emptyFeatureCollection())
-        }
+        clearSelectedPoi(map)
     })
     hoverPoiPopup?.remove()
     hoverPoiPopup = null
@@ -590,18 +690,21 @@ export function clearNoiseOverlay(map) {
 }
 
 export function getAddressSuggestions(map, query, limit = 6) {
-    if (!query || !map.loaded() || !map.getLayer('parcel-fill')) {
+    if (!query || !map.loaded()) {
         return []
     }
 
     const normalizedQuery = query.toLocaleLowerCase('et-EE')
+    const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean)
     const seen = new Set()
     let features = []
 
     try {
-        features = map.queryRenderedFeatures({ layers: ['parcel-fill'] })
+        features = map.querySourceFeatures('tallinn_parcels', {
+            sourceLayer: 'tallinn_parcels',
+        })
     } catch {
-        return []
+        features = map.queryRenderedFeatures(undefined, { layers: ['parcel-fill'] })
     }
 
     return features
@@ -611,18 +714,22 @@ export function getAddressSuggestions(map, query, limit = 6) {
                 return false
             }
             seen.add(address)
-            return address.toLocaleLowerCase('et-EE').includes(normalizedQuery)
+            const normalizedAddress = address.toLocaleLowerCase('et-EE')
+            return queryTokens.every((token) => normalizedAddress.includes(token))
         })
-        .sort((a, b) => {
-            const aLower = a.toLocaleLowerCase('et-EE')
-            const bLower = b.toLocaleLowerCase('et-EE')
-            const aStarts = aLower.startsWith(normalizedQuery) ? 0 : 1
-            const bStarts = bLower.startsWith(normalizedQuery) ? 0 : 1
-            if (aStarts !== bStarts) {
-                return aStarts - bStarts
+        .map((address) => {
+            const normalizedAddress = address.toLocaleLowerCase('et-EE')
+            const starts = normalizedAddress.startsWith(normalizedQuery) ? 0 : 1
+            const firstIndex = Math.min(
+                ...queryTokens.map((token) => normalizedAddress.indexOf(token)).filter((index) => index >= 0),
+            )
+            return {
+                address,
+                score: starts * 1000 + firstIndex * 10 + address.length,
             }
-            return a.length - b.length
         })
+        .sort((a, b) => a.score - b.score || a.address.localeCompare(b.address, 'et-EE'))
+        .map((item) => item.address)
         .slice(0, limit)
 }
 
