@@ -11,36 +11,23 @@ const DETAIL_PLAN_LINE_LAYER_ID = 'detail-plan-line'
 const POI_SOURCE_ID = 'nearby-pois'
 const POI_CIRCLE_LAYER_ID = 'nearby-pois-circle'
 const POI_LABEL_LAYER_ID = 'nearby-pois-label'
+const POI_SELECTED_SOURCE_ID = 'selected-poi'
+const POI_SELECTED_LAYER_ID = 'selected-poi-highlight'
+const NOISE_SOURCE_ID = 'noise-areas'
+const NOISE_FILL_LAYER_ID = 'noise-areas-fill'
+const NOISE_LINE_LAYER_ID = 'noise-areas-line'
+const PARCEL_SELECTED_LAYER_ID = 'parcel-fill-selected'
 
-let poiPopup = null
+let hoverPoiPopup = null
+let pinnedPoiPopup = null
 
 function addMapEvents(map, options) {
-    let hoveredTunnus = null
-
-    function handleParcelHover(event) {
-        const feature = event.features?.[0]
-
-        if (!feature) {
-            return
-        }
-
-        const tunnus = feature.properties.tunnus
-
-        if (tunnus === hoveredTunnus) {
-            return
-        }
-
-        hoveredTunnus = tunnus
+    map.on("mouseenter", "parcel-fill", () => {
         map.getCanvas().style.cursor = 'pointer'
-        map.setFilter('parcel-fill-hover', ['==', ['get', 'tunnus'], tunnus])
-    }
-
-    map.on("mousemove", "parcel-fill", handleParcelHover)
+    })
 
     map.on("mouseleave", "parcel-fill", () => {
-        hoveredTunnus = null
         map.getCanvas().style.cursor = ''
-        map.setFilter('parcel-fill-hover', ['==', ['get', 'tunnus'], ''])
     })
 
     map.on("click", "parcel-fill", (event) => {
@@ -49,6 +36,8 @@ function addMapEvents(map, options) {
             console.error("Couldnt get features from parcel");
             return;
         }
+        clearPinnedPoiPopup()
+        setSelectedParcel(map, feature.properties.tunnus)
         if (options.onParcelClick){
             options.onParcelClick(feature);
         }
@@ -71,6 +60,13 @@ function runWhenMapReady(map, callback) {
     }
 
     map.once('load', callback)
+}
+
+function emptyFeatureCollection() {
+    return {
+        type: 'FeatureCollection',
+        features: [],
+    }
 }
 
 function ensureDetailPlanLayers(map) {
@@ -225,6 +221,168 @@ function ensurePoiLayers(map) {
             },
         })
     }
+
+    if (!map.getSource(POI_SELECTED_SOURCE_ID)) {
+        map.addSource(POI_SELECTED_SOURCE_ID, {
+            type: 'geojson',
+            data: emptyFeatureCollection(),
+        })
+    }
+
+    if (!map.getLayer(POI_SELECTED_LAYER_ID)) {
+        map.addLayer({
+            id: POI_SELECTED_LAYER_ID,
+            type: 'circle',
+            source: POI_SELECTED_SOURCE_ID,
+            paint: {
+                'circle-color': 'transparent',
+                'circle-radius': [
+                    'interpolate',
+                    ['linear'],
+                    ['zoom'],
+                    11,
+                    12,
+                    15,
+                    18,
+                ],
+                'circle-stroke-color': '#111827',
+                'circle-stroke-width': 3,
+                'circle-opacity': 0.95,
+            },
+        })
+    }
+}
+
+function ensureNoiseLayers(map) {
+    if (!map.getSource(NOISE_SOURCE_ID)) {
+        map.addSource(NOISE_SOURCE_ID, {
+            type: 'geojson',
+            data: emptyFeatureCollection(),
+        })
+    }
+
+    if (!map.getLayer(NOISE_FILL_LAYER_ID)) {
+        map.addLayer(
+            {
+                id: NOISE_FILL_LAYER_ID,
+                type: 'fill',
+                source: NOISE_SOURCE_ID,
+                paint: {
+                    'fill-color': [
+                        'interpolate',
+                        ['linear'],
+                        ['coalesce', ['get', 'MYRAKLASS'], ['get', 'db'], ['get', 'noise_db'], 40],
+                        40,
+                        '#22c55e',
+                        55,
+                        '#facc15',
+                        65,
+                        '#ef4444',
+                        75,
+                        '#7e22ce',
+                    ],
+                    'fill-opacity': 0.28,
+                },
+            },
+            'parcel-line',
+        )
+    }
+
+    if (!map.getLayer(NOISE_LINE_LAYER_ID)) {
+        map.addLayer(
+            {
+                id: NOISE_LINE_LAYER_ID,
+                type: 'line',
+                source: NOISE_SOURCE_ID,
+                paint: {
+                    'line-color': [
+                        'interpolate',
+                        ['linear'],
+                        ['coalesce', ['get', 'MYRAKLASS'], ['get', 'db'], ['get', 'noise_db'], 40],
+                        40,
+                        '#16a34a',
+                        55,
+                        '#ca8a04',
+                        65,
+                        '#dc2626',
+                        75,
+                        '#6b21a8',
+                    ],
+                    'line-width': 1.2,
+                    'line-opacity': 0.82,
+                },
+            },
+            'parcel-line',
+        )
+    }
+}
+
+function clearPinnedPoiPopup() {
+    pinnedPoiPopup?.remove()
+    pinnedPoiPopup = null
+}
+
+function createPoiPopupBody(properties) {
+    const popupBody = document.createElement('div')
+    popupBody.className = 'poi-popup'
+
+    const title = document.createElement('strong')
+    title.textContent = properties?.name || 'Lähedal asuv objekt'
+    popupBody.appendChild(title)
+
+    const meta = [
+        properties?.subgroup,
+        properties?.distanceLabel,
+    ].filter(Boolean).join(' · ')
+    if (meta) {
+        const metaElement = document.createElement('small')
+        metaElement.textContent = meta
+        popupBody.appendChild(metaElement)
+    }
+
+    if (properties?.address) {
+        const addressElement = document.createElement('span')
+        addressElement.textContent = properties.address
+        popupBody.appendChild(addressElement)
+    }
+
+    if (properties?.website) {
+        const link = document.createElement('a')
+        link.href = /^https?:\/\//i.test(properties.website)
+            ? properties.website
+            : `https://${properties.website}`
+        link.target = '_blank'
+        link.rel = 'noreferrer'
+        link.textContent = properties.website.length <= 28 ? properties.website : 'koduleht'
+        popupBody.appendChild(link)
+    }
+
+    return popupBody
+}
+
+function showPoiPopup(map, feature, pinned = false) {
+    const coordinates = feature?.geometry?.coordinates
+    if (!Array.isArray(coordinates)) {
+        return
+    }
+
+    const popup = new maplibregl.Popup({
+        closeButton: pinned,
+        closeOnClick: false,
+        offset: 14,
+        className: 'poi-map-popup',
+    })
+        .setLngLat(coordinates)
+        .setDOMContent(createPoiPopupBody(feature.properties))
+        .addTo(map)
+
+    if (pinned) {
+        clearPinnedPoiPopup()
+        pinnedPoiPopup = popup
+    } else {
+        hoverPoiPopup?.remove()
+        hoverPoiPopup = popup
+    }
 }
 
 function addPoiEvents(map) {
@@ -233,54 +391,35 @@ function addPoiEvents(map) {
     })
 
     map.on('mousemove', POI_CIRCLE_LAYER_ID, (event) => {
-        const feature = event.features?.[0]
-        const coordinates = feature?.geometry?.coordinates
-
-        if (!feature || !Array.isArray(coordinates)) {
+        if (pinnedPoiPopup) {
             return
         }
 
-        const name = feature.properties?.name || 'Lähedal asuv objekt'
-        const address = feature.properties?.address
-        const categoryLabel = feature.properties?.categoryLabel
+        const feature = event.features?.[0]
 
-        const popupBody = document.createElement('div')
-        popupBody.className = 'poi-popup'
-
-        const title = document.createElement('strong')
-        title.textContent = name
-        popupBody.appendChild(title)
-
-        if (address) {
-            const addressElement = document.createElement('span')
-            addressElement.textContent = address
-            popupBody.appendChild(addressElement)
+        if (!feature) {
+            return
         }
 
-        if (categoryLabel) {
-            const categoryElement = document.createElement('small')
-            categoryElement.textContent = categoryLabel
-            popupBody.appendChild(categoryElement)
+        showPoiPopup(map, feature, false)
+    })
+
+    map.on('click', POI_CIRCLE_LAYER_ID, (event) => {
+        const feature = event.features?.[0]
+        if (!feature) {
+            return
         }
 
-        if (!poiPopup) {
-            poiPopup = new maplibregl.Popup({
-                closeButton: false,
-                closeOnClick: false,
-                offset: 14,
-                className: 'poi-map-popup',
-            })
+        if (typeof event.preventDefault === 'function') {
+            event.preventDefault()
         }
-
-        poiPopup
-            .setLngLat(coordinates)
-            .setDOMContent(popupBody)
-            .addTo(map)
+        focusPoiOnMap(map, feature)
     })
 
     map.on('mouseleave', POI_CIRCLE_LAYER_ID, () => {
         map.getCanvas().style.cursor = ''
-        poiPopup?.remove()
+        hoverPoiPopup?.remove()
+        hoverPoiPopup = null
     })
 }
 
@@ -317,13 +456,33 @@ function addParcelLayers(map) {
     })
 
     map.addLayer({
-        id: 'parcel-fill-hover',
+        id: PARCEL_SELECTED_LAYER_ID,
         type: 'fill',
         source: 'tallinn_parcels',
         'source-layer': 'tallinn_parcels',
         paint: {
-            'fill-color': '#c522225e',
-            'fill-opacity': 0.35,
+            'fill-color': '#f59e0b',
+            'fill-opacity': 0.34,
+        },
+        filter: ['==', ['get', 'tunnus'], '']
+    })
+
+    map.addLayer({
+        id: 'parcel-selected-line',
+        type: 'line',
+        source: 'tallinn_parcels',
+        'source-layer': 'tallinn_parcels',
+        paint: {
+            'line-color': '#92400e',
+            'line-width': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                11,
+                2.2,
+                15,
+                4,
+            ],
         },
         filter: ['==', ['get', 'tunnus'], '']
     })
@@ -347,10 +506,23 @@ export function createMap(id, options = {}) {
         addMapEvents(map, options)
         ensurePoiLayers(map)
         addPoiEvents(map)
+        ensureNoiseLayers(map)
         map.addControl(createDetailPlanToggleControl(map), 'top-left')
     })
 
     return map
+}
+
+export function setSelectedParcel(map, tunnus) {
+    runWhenMapReady(map, () => {
+        const filter = ['==', ['get', 'tunnus'], tunnus || '']
+        if (map.getLayer(PARCEL_SELECTED_LAYER_ID)) {
+            map.setFilter(PARCEL_SELECTED_LAYER_ID, filter)
+        }
+        if (map.getLayer('parcel-selected-line')) {
+            map.setFilter('parcel-selected-line', filter)
+        }
+    })
 }
 
 export function setPoiOverlay(map, featureCollection) {
@@ -368,7 +540,90 @@ export function clearPoiOverlay(map) {
         type: 'FeatureCollection',
         features: [],
     })
-    poiPopup?.remove()
+    runWhenMapReady(map, () => {
+        ensurePoiLayers(map)
+        const source = map.getSource(POI_SELECTED_SOURCE_ID)
+        if (source) {
+            source.setData(emptyFeatureCollection())
+        }
+    })
+    hoverPoiPopup?.remove()
+    hoverPoiPopup = null
+    clearPinnedPoiPopup()
+}
+
+export function focusPoiOnMap(map, feature) {
+    runWhenMapReady(map, () => {
+        ensurePoiLayers(map)
+        const source = map.getSource(POI_SELECTED_SOURCE_ID)
+        if (source) {
+            source.setData({
+                type: 'FeatureCollection',
+                features: [feature],
+            })
+        }
+
+        const coordinates = feature?.geometry?.coordinates
+        if (Array.isArray(coordinates)) {
+            map.easeTo({
+                center: coordinates,
+                zoom: Math.max(map.getZoom(), 15),
+                duration: 450,
+            })
+        }
+        showPoiPopup(map, feature, true)
+    })
+}
+
+export function setNoiseOverlay(map, featureCollection) {
+    runWhenMapReady(map, () => {
+        ensureNoiseLayers(map)
+        const source = map.getSource(NOISE_SOURCE_ID)
+        if (source) {
+            source.setData(featureCollection)
+        }
+    })
+}
+
+export function clearNoiseOverlay(map) {
+    setNoiseOverlay(map, emptyFeatureCollection())
+}
+
+export function getAddressSuggestions(map, query, limit = 6) {
+    if (!query || !map.loaded() || !map.getLayer('parcel-fill')) {
+        return []
+    }
+
+    const normalizedQuery = query.toLocaleLowerCase('et-EE')
+    const seen = new Set()
+    let features = []
+
+    try {
+        features = map.queryRenderedFeatures({ layers: ['parcel-fill'] })
+    } catch {
+        return []
+    }
+
+    return features
+        .map((feature) => feature.properties?.l_aadress)
+        .filter((address) => {
+            if (!address || seen.has(address)) {
+                return false
+            }
+            seen.add(address)
+            return address.toLocaleLowerCase('et-EE').includes(normalizedQuery)
+        })
+        .sort((a, b) => {
+            const aLower = a.toLocaleLowerCase('et-EE')
+            const bLower = b.toLocaleLowerCase('et-EE')
+            const aStarts = aLower.startsWith(normalizedQuery) ? 0 : 1
+            const bStarts = bLower.startsWith(normalizedQuery) ? 0 : 1
+            if (aStarts !== bStarts) {
+                return aStarts - bStarts
+            }
+            return a.length - b.length
+        })
+        .slice(0, limit)
 }
 
 export function addGeoJsonLayerToMap(result_geojson, map) {
