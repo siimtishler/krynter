@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="et">
 
 <head>
   <meta charset="UTF-8">
@@ -10,17 +10,25 @@
 </head>
 
 <body>
-  <search-bar id="search-bar">
-    <header id="search-header">Sisesta aadress või katastritunnus</header>
-    <input id="search-input" type="text" value="P. Kerese tn 5a">
-    <button id="search-button">Otsi</button>
-  </search-bar>
+  <main class="app-shell">
+    <section id="map" aria-label="Kinnistute kaart"></section>
 
-  <aside id="results-panel" aria-live="polite">
-    <p class="results-empty">Vali kaartilt kinnistu või otsi aadressi järgi.</p>
-  </aside>
+    <form id="search-bar" class="search-card" role="search">
+      <label id="search-header" for="search-input">Aadress või katastritunnus</label>
+      <div class="search-row">
+        <input id="search-input" type="search" value="P. Kerese tn 5a" autocomplete="street-address">
+        <button id="search-button" class="primary-button" type="submit">Otsi</button>
+      </div>
+    </form>
 
-  <div id="map"></div>
+    <aside id="results-panel" class="results-drawer" aria-live="polite" aria-label="Kinnistu andmed">
+      <div class="empty-panel">
+        <p class="eyebrow">Kinnistu ülevaade</p>
+        <h1>Vali kinnistu kaardilt või otsi aadressi järgi.</h1>
+        <p class="muted">Tulemused kuvatakse siin koondatud planeeringu-, riski-, keskkonna- ja teenuste vaadetena.</p>
+      </div>
+    </aside>
+  </main>
 </body>
 
 </html>
