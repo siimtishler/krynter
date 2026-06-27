@@ -28,13 +28,17 @@ TOPIC_KEYWORDS = {
     "ehitisealune": 6,
     "ehitusalune": 6,
     "brutopind": 5,
+    "brutopindala": 5,
     "bruto pind": 5,
     "kõrgus": 4,
     "hoonete arv": 6,
     "katuse": 4,
     "katusekalle": 5,
+    "katusekalded": 4,
+    "tuleohutusklass": 5,
+    "tuleohutus": 5,
     "tulepüsivus": 5,
-    "tp-": 4,
+    "tp-": 5,
 }
 
 
@@ -72,6 +76,7 @@ FIELD_WINDOW_KEYWORDS: dict[str, tuple[str, ...]] = {
     ),
     "brutopind_m2": (
         "brutopind",
+        "brutopindala",
         "bruto pind",
         "suletud brutopind",
     ),
@@ -113,9 +118,12 @@ FIELD_WINDOW_KEYWORDS: dict[str, tuple[str, ...]] = {
     "katusekalle": (
         "katusekalle",
         "katuse kalle",
+        "katuse kalded",
+        "katusekalded",
     ),
     "tulepusivusklass": (
         "tulepüsivus",
+        "tuleohutusklass",
         "tulepüsivusklass",
         "tulepüsivusaste",
         "tp-",
