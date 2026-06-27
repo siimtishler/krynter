@@ -96,6 +96,22 @@ a:focus-visible {
   padding: 10px 12px;
 }
 
+.search-suggestion-hint {
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 750;
+  justify-self: start;
+  padding: 0;
+  text-align: left;
+}
+
+.search-suggestion-hint:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 .primary-button,
 .secondary-button {
   align-items: center;
@@ -173,13 +189,14 @@ button:disabled {
 .muted,
 .section-summary,
 .result-meta,
-.empty-state {
+.empty-state,
+.field-page {
   color: var(--muted);
 }
 
 .eyebrow {
   color: #475569;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 800;
   letter-spacing: 0;
   margin: 0;
@@ -213,12 +230,6 @@ button:disabled {
   display: flex;
   gap: 12px;
   justify-content: space-between;
-}
-
-.section-header h2 {
-  font-size: 18px;
-  line-height: 1.2;
-  margin: 3px 0 0;
 }
 
 .section-summary {
@@ -376,8 +387,15 @@ button:disabled {
 }
 
 .analysis-actions {
+  align-items: center;
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   justify-content: flex-start;
+}
+
+.analysis-status {
+  min-height: 38px;
 }
 
 .analysis-output {
@@ -423,6 +441,12 @@ button:disabled {
   font-weight: 850;
   margin: 8px 0 4px;
   overflow-wrap: anywhere;
+}
+
+.field-page {
+  font-size: 12px;
+  font-weight: 750;
+  margin: 0 0 4px;
 }
 
 .review-box {
@@ -488,6 +512,22 @@ button:disabled {
   overflow: hidden;
 }
 
+.ai-loader.compact {
+  gap: 4px 8px;
+  min-height: 38px;
+  padding: 7px 10px;
+}
+
+.ai-loader.compact .loader-orb {
+  height: 20px;
+  width: 20px;
+}
+
+.ai-loader.compact strong {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .ai-loader::after,
 .ai-pending::after {
   animation: shimmer 1.7s infinite;
@@ -547,15 +587,19 @@ button:disabled {
   background: linear-gradient(90deg, #22c55e, #facc15, #ef4444, #7e22ce);
   border-radius: 999px;
   height: 10px;
-  overflow: hidden;
   position: relative;
 }
 
-.noise-meter span {
-  background: rgb(15 23 42 / 28%);
+.noise-indicator {
+  background: #111827;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 80%);
   display: block;
-  height: 100%;
-  min-width: 3px;
+  height: 18px;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px;
 }
 
 .poi-groups {
@@ -577,6 +621,82 @@ button:disabled {
   display: inline-block;
   height: 14px;
   width: 14px;
+}
+
+.poi-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.poi-list-item {
+  background: #ffffff;
+  border: 1px solid #e3eaf2;
+  border-radius: 7px;
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+}
+
+.poi-item-button {
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  gap: 4px;
+  padding: 0;
+  text-align: left;
+}
+
+.poi-item-button:hover .result-title {
+  color: var(--accent);
+}
+
+.poi-item-top,
+.poi-item-meta {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.poi-distance {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.poi-item-meta {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.poi-item-meta span {
+  overflow-wrap: anywhere;
+}
+
+.poi-item-meta span:last-child {
+  max-width: 52%;
+  text-align: right;
+}
+
+.poi-website-link {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 750;
+  justify-self: start;
+  text-decoration: none;
+}
+
+.poi-website-link:hover {
+  text-decoration: underline;
+}
+
+[debug].debug-hidden {
+  display: none !important;
 }
 
 .reveal {

@@ -54,3 +54,14 @@
   color: #64748b;
   font-size: 12px;
 }
+
+.poi-popup a {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.poi-popup a:hover {
+  text-decoration: underline;
+}
