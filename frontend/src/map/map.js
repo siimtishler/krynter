@@ -46,7 +46,7 @@ function addMapEvents(map, options) {
         }
         clearPinnedPoiPopup()
         setSelectedParcel(map, feature.properties.tunnus)
-        if (options.onParcelClick){
+        if (options.onParcelClick) {
             options.onParcelClick(feature);
         }
     })
@@ -174,7 +174,7 @@ function createDetailPlanToggleControl(map) {
 
             return container
         },
-        onRemove() {},
+        onRemove() { },
     }
 }
 
@@ -646,7 +646,7 @@ export function createMap(id, options = {}) {
             [28.3, 60.1],
         ],
     })
-    
+
     map.on("load", () => {
         addParcelLayers(map)
         addMapEvents(map, options)

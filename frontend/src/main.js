@@ -1081,7 +1081,7 @@ function setActiveSuggestion(index) {
 }
 
 const map = createMap("map", {
-    onParcelClick: async function(feature) {
+    onParcelClick: async function (feature) {
         const address = feature.properties?.l_aadress
         const tunnus = feature.properties?.tunnus
         const lookupValue = tunnus || address
