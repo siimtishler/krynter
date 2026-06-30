@@ -19,7 +19,6 @@ const searchForm = getRequiredElement('search-bar', HTMLFormElement)
 const searchButton = getRequiredElement('search-button', HTMLButtonElement)
 const searchInput = getRequiredElement('search-input', HTMLInputElement)
 const searchSuggestions = getRequiredElement('search-suggestions', HTMLElement)
-const searchSuggestionHint = getRequiredElement('search-suggestion-hint', HTMLButtonElement)
 const resultsPanel = getRequiredElement('results-panel', HTMLElement)
 searchInput.name = `parcel-search-${Date.now()}`
 
@@ -1029,8 +1028,6 @@ function updateAddressSuggestions() {
     currentAddressSuggestions = []
     activeSuggestionIndex = -1
     closestAddressSuggestion = ''
-    searchSuggestionHint.hidden = true
-    searchSuggestionHint.textContent = ''
     searchSuggestions.hidden = true
 
     if (query.length < 2 || classifyParcelSearchInput(query).type !== 'address') {
@@ -1040,7 +1037,7 @@ function updateAddressSuggestions() {
     const suggestions = getAddressSuggestions(map, query, 6)
     currentAddressSuggestions = suggestions
 
-    if (suggestions.length) {
+    if (suggestions.length || document.activeElement === searchInput) {
         searchSuggestions.hidden = false
     }
 
@@ -1055,11 +1052,6 @@ function updateAddressSuggestions() {
         searchSuggestions.appendChild(option)
     }
 
-    if (suggestions[0] && suggestions[0] !== query) {
-        closestAddressSuggestion = suggestions[0]
-        searchSuggestionHint.textContent = `Lähim vaste: ${closestAddressSuggestion}`
-        searchSuggestionHint.hidden = false
-    }
 }
 
 function hideAddressSuggestions() {
@@ -1137,13 +1129,6 @@ searchInput.addEventListener('keydown', (event) => {
     }
 })
 
-searchSuggestionHint.addEventListener('click', () => {
-    if (!closestAddressSuggestion) {
-        return
-    }
-
-    chooseAddressSuggestion(closestAddressSuggestion)
-})
 
 document.addEventListener('mousedown', (event) => {
     if (!searchForm.contains(event.target)) {

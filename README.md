@@ -36,7 +36,11 @@ Start backend dev
 Start frontend dev
 `cd frontend && npm run dev`
 
+Addtionally:
+Add .env to frontend/ and `VITE_SHOW_DEBUG_HTML=true` to see extra debug info directly on the site
+
 Open up the frontend URL and youre good to go
+
 
 ### Local dependency installer
 

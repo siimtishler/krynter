@@ -3,6 +3,7 @@
 .codex
 .pytest_cache
 .ruff_cache
+.env
 __pycache__
 frontend/node_modules
 data/*

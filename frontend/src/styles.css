@@ -96,21 +96,6 @@ a:focus-visible {
   padding: 10px 12px;
 }
 
-.search-suggestion-hint {
-  background: transparent;
-  color: #475569;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 750;
-  justify-self: start;
-  padding: 0;
-  text-align: left;
-}
-
-.search-suggestion-hint:hover {
-  color: var(--accent);
-  text-decoration: underline;
-}
 
 .search-suggestions {
   background: #ffffff;
