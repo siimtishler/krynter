@@ -1,4 +1,5 @@
 import importlib
+import json
 
 import geopandas as gpd
 import numpy as np
@@ -9,8 +10,14 @@ from shapely.geometry import Point, box
 
 from backend.api import api
 from backend.geo import Parcel
+from backend.geo.constants import MAX_POI_QUERY_LIMIT
 from backend.geo.crs import shape_to_frontend_geojson
 from backend.geo.noise import average_noise_from_area
+from backend.geo.poi_settings import (
+    load_default_poi_categories,
+    load_poi_categories,
+    save_poi_categories,
+)
 from backend.geo.overlays import (
     get_overlapping_detail_plans,
     get_overlapping_heritage_pois,
@@ -108,7 +115,7 @@ def test_nearest_pois_groups_include_expected_categories():
     ]
 
 
-def test_nearest_pois_are_sorted_limited_and_empty_groups_are_returned():
+def test_nearest_pois_are_sorted_and_empty_groups_are_returned():
     result = get_nearest_pois_by_group(
         Point(0, 0),
         top_n=2,
@@ -116,8 +123,12 @@ def test_nearest_pois_are_sorted_limited_and_empty_groups_are_returned():
     )
 
     sport_items = result["sport_ja_liikumine"]["items"]
-    assert [item["nimi"] for item in sport_items] == ["Spordihall", "Terviserada"]
-    assert [item["kaugus_m"] for item in sport_items] == [10.0, 20.0]
+    assert [item["nimi"] for item in sport_items] == [
+        "Spordihall",
+        "Terviserada",
+        "Supluskoht",
+    ]
+    assert [item["kaugus_m"] for item in sport_items] == [10.0, 20.0, 30.0]
     assert result["tervis"]["items"] == []
 
 
@@ -181,6 +192,261 @@ def test_daily_services_returns_configured_service_types_not_only_closest_group(
     assert [item["nimi"] for item in items] == ["ATM 1", "Postkontor", "Tankla"]
 
 
+def test_poi_settings_missing_file_falls_back_to_defaults(tmp_path):
+    result = load_poi_categories(tmp_path / "missing.json")
+
+    assert "transport" in result
+    assert result["transport"]["queries"][0]["limit"] == 3
+
+
+def test_poi_settings_save_and_reload_normalizes_filters(tmp_path):
+    settings_path = tmp_path / "poi-settings.json"
+    saved = save_poi_categories(
+        {
+            "transport": {
+                "label": "Transport",
+                "queries": [
+                    {
+                        "label": "Edited label",
+                        "limit": 2,
+                        "filters": {"grupp": {"wrong-filter"}},
+                    }
+                ],
+            }
+        },
+        settings_path,
+    )
+
+    reloaded = load_poi_categories(settings_path)
+
+    assert saved["transport"]["queries"][0]["filters"]["alamgrupp"] == ["bussipeatus"]
+    assert saved["transport"]["queries"][0]["label"] == "Bussipeatus"
+    assert reloaded["transport"]["queries"][0]["limit"] == 2
+
+
+def test_poi_default_settings_load_from_default_file(tmp_path):
+    settings_path = tmp_path / "poi-settings-default.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "transport": {
+                    "queries": [
+                        {"label": "Bussipeatus", "limit": 2},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = load_default_poi_categories(settings_path)
+
+    assert result["transport"]["queries"][0]["limit"] == 2
+
+
+def test_poi_settings_user_disabled_persists(tmp_path):
+    settings_path = tmp_path / "poi-settings.json"
+
+    saved = save_poi_categories(
+        {
+            "transport": {
+                "user-disabled": True,
+                "queries": [{"label": "Bussipeatus", "limit": 2}],
+            }
+        },
+        settings_path,
+    )
+
+    reloaded = load_poi_categories(settings_path)
+
+    assert saved["transport"]["user-disabled"] is True
+    assert reloaded["transport"]["user-disabled"] is True
+
+
+def test_poi_settings_all_zero_category_is_disabled(tmp_path):
+    saved = save_poi_categories(
+        {
+            "transport": {
+                "queries": [
+                    {"label": "Bussipeatus", "limit": 0},
+                    {"label": "Rongipeatus", "limit": 0},
+                    {"label": "Trammipeatus", "limit": 0},
+                    {"label": "Parkla", "limit": 0},
+                ],
+            }
+        },
+        tmp_path / "poi-settings.json",
+    )
+
+    assert saved["transport"]["user-disabled"] is True
+
+
+def test_user_disabled_poi_category_returns_no_items():
+    pois = gpd.GeoDataFrame(
+        [
+            {
+                "nimi": "Buss",
+                "aadress": "Buss 1",
+                "grupp": "peatus",
+                "alamgrupp": "bussipeatus",
+                "ylemgrupp": "Transport",
+                "poi_type": "Bussipeatus",
+                "geometry": Point(1, 0),
+            }
+        ],
+        crs="EPSG:3301",
+    )
+
+    result = get_nearest_pois_by_group(
+        Point(0, 0),
+        pois=pois,
+        poi_categories={
+            "transport": {
+                "label": "Transport",
+                "user-disabled": True,
+                "queries": [
+                    {
+                        "label": "Bussipeatus",
+                        "limit": 3,
+                        "filters": {"alamgrupp": ["bussipeatus"]},
+                    },
+                ],
+            }
+        },
+    )
+
+    assert result["transport"]["items"] == []
+
+
+def test_custom_poi_query_limits_can_be_zero_or_five():
+    rows = [
+        {
+            "nimi": f"Buss {index}",
+            "aadress": f"Buss {index}",
+            "grupp": "peatus",
+            "alamgrupp": "bussipeatus",
+            "ylemgrupp": "Transport",
+            "poi_type": "Bussipeatus",
+            "geometry": Point(index, 0),
+        }
+        for index in range(1, 8)
+    ]
+    rows.extend(
+        {
+            "nimi": f"Tramm {index}",
+            "aadress": f"Tramm {index}",
+            "grupp": "peatus",
+            "alamgrupp": "trammipeatus",
+            "ylemgrupp": "Transport",
+            "poi_type": "Trammipeatus",
+            "geometry": Point(index, 1),
+        }
+        for index in range(1, 4)
+    )
+    pois = gpd.GeoDataFrame(rows, crs="EPSG:3301")
+
+    result = get_nearest_pois_by_group(
+        Point(0, 0),
+        pois=pois,
+        poi_categories={
+            "transport": {
+                "label": "Transport",
+                "queries": [
+                    {
+                        "label": "Bussipeatus",
+                        "limit": MAX_POI_QUERY_LIMIT,
+                        "filters": {"alamgrupp": ["bussipeatus"]},
+                    },
+                    {
+                        "label": "Trammipeatus",
+                        "limit": 0,
+                        "filters": {"alamgrupp": ["trammipeatus"]},
+                    },
+                ],
+            }
+        },
+    )
+
+    assert [item["nimi"] for item in result["transport"]["items"]] == [
+        "Buss 1",
+        "Buss 2",
+        "Buss 3",
+        "Buss 4",
+        "Buss 5",
+    ]
+
+
+def test_custom_poi_category_can_return_more_than_three_items():
+    rows = [
+        {
+            "nimi": f"Buss {index}",
+            "aadress": f"Buss {index}",
+            "grupp": "peatus",
+            "alamgrupp": "bussipeatus",
+            "ylemgrupp": "Transport",
+            "poi_type": "Bussipeatus",
+            "geometry": Point(index, 0),
+        }
+        for index in range(1, 4)
+    ]
+    rows.extend(
+        {
+            "nimi": f"Tramm {index}",
+            "aadress": f"Tramm {index}",
+            "grupp": "peatus",
+            "alamgrupp": "trammipeatus",
+            "ylemgrupp": "Transport",
+            "poi_type": "Trammipeatus",
+            "geometry": Point(index, 1),
+        }
+        for index in range(1, 4)
+    )
+    pois = gpd.GeoDataFrame(rows, crs="EPSG:3301")
+
+    result = get_nearest_pois_by_group(
+        Point(0, 0),
+        pois=pois,
+        poi_categories={
+            "transport": {
+                "label": "Transport",
+                "queries": [
+                    {
+                        "label": "Bussipeatus",
+                        "limit": 3,
+                        "filters": {"alamgrupp": ["bussipeatus"]},
+                    },
+                    {
+                        "label": "Trammipeatus",
+                        "limit": 3,
+                        "filters": {"alamgrupp": ["trammipeatus"]},
+                    },
+                ],
+            }
+        },
+    )
+
+    assert len(result["transport"]["items"]) == 6
+
+
+def test_invalid_poi_query_limit_is_rejected(tmp_path):
+    with pytest.raises(ValueError):
+        save_poi_categories(
+            {
+                "transport": {
+                    "label": "Transport",
+                    "queries": [
+                        {
+                            "label": "Bussipeatus",
+                            "limit": 6,
+                            "filters": {"alamgrupp": ["bussipeatus"]},
+                        }
+                    ],
+                }
+            },
+            tmp_path / "poi-settings.json",
+        )
+
+
 def test_noise_average_returns_upper_bound_for_missing_area():
     parcel = box(0, 0, 10, 10)
     noise_areas = gpd.GeoDataFrame(
@@ -206,7 +472,7 @@ def test_noise_average_returns_less_than_40_for_no_noise_areas():
 
     result = average_noise_from_area(noise_areas, parcel)
 
-    assert result["label"] == "average < 40.0 dB"
+    assert result["label"] == "Keskmine < 40.0 dB"
     assert result["mapped_pct"] == 0.0
     assert result["missing_pct"] == 100.0
 
@@ -416,6 +682,24 @@ def test_detail_plans_geojson_endpoint_returns_feature_collection(monkeypatch):
     assert feature["geometry"]["type"] == "Polygon"
     assert feature["properties"]["kovid"] == "DP001"
     assert "geometry" not in feature["properties"]
+
+
+def test_noise_area_geojson_endpoint_returns_feature_collection(monkeypatch):
+    noise_areas = gpd.GeoDataFrame(
+        [
+            {
+                "MYRAKLASS": 65,
+                "geometry": box(0, 0, 1, 1),
+            }
+        ],
+        crs="EPSG:3301",
+    )
+    monkeypatch.setattr(api, "get_noise", lambda: noise_areas)
+
+    response = api.return_noise_area_geojson()
+
+    assert response["type"] == "FeatureCollection"
+    assert response["features"][0]["properties"]["MYRAKLASS"] == 65
 
 
 def test_spatial_intersections_filters_non_overlapping_candidates():

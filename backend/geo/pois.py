@@ -6,11 +6,11 @@ import shapely
 
 from backend.geo.constants import (
     DEFAULT_POI_LIMIT,
-    POI_CATEGORIES,
     POI_FILTER_COLUMNS,
     POI_RESPONSE_COLUMNS,
 )
 from backend.geo.crs import ensure_data_crs, shape_to_frontend_geojson
+from backend.geo.poi_settings import load_poi_categories
 from backend.geo.serializers import response_value
 
 
@@ -108,8 +108,6 @@ def _nearest_pois_for_category(
             rows.append(row)
 
     rows.sort(key=lambda row: row["kaugus_m"])
-    total_limit = category.get("total_limit", default_limit)
-    rows = rows[: max(0, int(total_limit))]
 
     return [_poi_row_to_dict(row) for row in rows]
 
@@ -118,21 +116,26 @@ def get_nearest_pois_by_group(
     point_or_geometry: shapely.geometry.base.BaseGeometry,
     pois: gpd.GeoDataFrame,
     top_n: int = DEFAULT_POI_LIMIT,
+    poi_categories: dict | None = None,
 ) -> dict:
     """Return grouped nearby POIs for the provided parcel geometry."""
     pois = ensure_data_crs(pois)
     origin = shapely.centroid(point_or_geometry)
+    categories = poi_categories or load_poi_categories()
     nearby_pois = {}
 
-    for category_id, category in POI_CATEGORIES.items():
-        nearby_pois[category_id] = {
-            "label": category["label"],
-            "items": _nearest_pois_for_category(
+    for category_id, category in categories.items():
+        items = []
+        if not category.get("user-disabled", False):
+            items = _nearest_pois_for_category(
                 pois=pois,
                 origin=origin,
                 category=category,
                 default_limit=top_n,
-            ),
+            )
+        nearby_pois[category_id] = {
+            "label": category["label"],
+            "items": items,
         }
 
     return nearby_pois

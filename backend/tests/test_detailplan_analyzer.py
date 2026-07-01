@@ -50,16 +50,20 @@ def make_pdf(path: Path, text: str) -> Path:
     return path
 
 
-def test_zip_extraction_prefers_sk_pdfs(tmp_path):
+def test_zip_extraction_prefers_sk_and_jn100_pdfs(tmp_path):
     zip_path = tmp_path / "files.zip"
     with zipfile.ZipFile(zip_path, "w") as archive:
         archive.writestr("docs/SK100_plan.pdf", b"sk")
+        archive.writestr("docs/JN100_plan.pdf", b"jn")
         archive.writestr("docs/MH100_report.pdf", b"mh")
 
     extracted = extract_relevant_pdfs(zip_path, tmp_path / "out")
 
-    assert [path.name for path in extracted] == ["SK100_plan.pdf"]
-    assert extracted[0].read_bytes() == b"sk"
+    assert [path.name for path in extracted] == ["JN100_plan.pdf", "SK100_plan.pdf"]
+    assert {path.name: path.read_bytes() for path in extracted} == {
+        "JN100_plan.pdf": b"jn",
+        "SK100_plan.pdf": b"sk",
+    }
 
 
 def test_zip_extraction_extracts_all_pdfs_when_no_sk(tmp_path):
@@ -92,6 +96,49 @@ def test_cached_plan_pdfs_excludes_generated_ocr_outputs(tmp_path):
     (tmp_path / "source_ocr.pdf").write_bytes(b"ocr")
 
     assert [path.name for path in cached_plan_pdfs(tmp_path)] == ["source.pdf"]
+
+
+def test_detail_plan_file_selector_picks_requested_pdf(tmp_path):
+    sk_path = tmp_path / "SK100_plan.pdf"
+    jn_path = tmp_path / "JN100_plan.pdf"
+    other_path = tmp_path / "MH100_plan.pdf"
+    sk_path.write_bytes(b"sk")
+    jn_path.write_bytes(b"jn")
+    other_path.write_bytes(b"mh")
+
+    assert (
+        api._detail_plan_file_path([other_path, sk_path, jn_path], "seletuskiri")
+        == sk_path
+    )
+    assert (
+        api._detail_plan_file_path([other_path, sk_path, jn_path], "detailplaneering")
+        == jn_path
+    )
+
+
+def test_detail_plan_file_endpoint_uses_address_filename(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "SK100_plan.pdf"
+    pdf_path.write_bytes(b"sk")
+    parcel = Parcel(
+        gpd.GeoDataFrame(
+            [{"l_aadress": "J. Poska tn 35", "geometry": Point(0, 0)}],
+            crs="EPSG:3301",
+        )
+    )
+    monkeypatch.setattr(api, "_parcel_from_searchable", lambda type, searchable: parcel)
+    monkeypatch.setattr(api, "highest_overlap_detail_plan", lambda parcel: {"sysid": 1})
+    monkeypatch.setattr(api, "download_plan_pdfs", lambda detail_plan: [pdf_path])
+
+    response = api.return_detail_plan_file(
+        type="address",
+        searchable="J. Poska tn 35",
+        file_type="seletuskiri",
+    )
+
+    assert (
+        'filename="j_poska_tn_35_seletuskiri.pdf"'
+        in response.headers["content-disposition"]
+    )
 
 
 def test_pdf_has_text_and_extract_pages(tmp_path):
