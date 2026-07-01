@@ -1,5 +1,11 @@
 import './styles.css'
-import { analyzeDetailPlan, searchForParcel } from "./api/parcels.js"
+import {
+    analyzeDetailPlan,
+    downloadDetailPlanFile,
+    getPoiSettings,
+    savePoiSettings,
+    searchForParcel,
+} from "./api/parcels.js"
 import { getRequiredElement, classifyParcelSearchInput } from "./utils/utils.js"
 import {
     clearNoiseOverlay,
@@ -60,6 +66,7 @@ let noiseOverlayVisible = false
 let closestAddressSuggestion = ''
 let currentAddressSuggestions = []
 let activeSuggestionIndex = -1
+let lastSearchValue = ''
 
 function emptyFeatureCollection() {
     return {
@@ -406,10 +413,29 @@ function renderPlanning(parent, detailPlans, searchValue) {
     )
 
     if (items.length) {
+        appendDetailPlanDownloads(section, searchValue)
         appendDetailPlanAnalysis(section, searchValue)
     }
 
     parent.appendChild(section)
+}
+
+function appendDetailPlanDownloads(parent, searchValue) {
+    const panel = createElement('div', 'download-actions')
+    const skButton = createElement('button', 'secondary-button', 'Laadi seletuskiri')
+    skButton.type = 'button'
+    panel.appendChild(skButton)
+
+    const planButton = createElement('button', 'secondary-button', 'Laadi detailplaneering')
+    planButton.type = 'button'
+    panel.appendChild(planButton)
+
+    const message = createElement('div', 'download-message')
+    parent.appendChild(panel)
+    parent.appendChild(message)
+
+    skButton.addEventListener('click', () => handleDetailPlanDownload(searchValue, 'seletuskiri', skButton, message))
+    planButton.addEventListener('click', () => handleDetailPlanDownload(searchValue, 'detailplaneering', planButton, message))
 }
 
 function appendDetailPlanAnalysis(parent, searchValue) {
@@ -418,18 +444,10 @@ function appendDetailPlanAnalysis(parent, searchValue) {
     const button = createElement('button', 'primary-button analysis-button', 'Analüüsi ehitusõigust')
     button.type = 'button'
     actions.appendChild(button)
-
-    const pdfButton = createElement('button', 'secondary-button', 'Laadi PDF')
-    pdfButton.type = 'button'
-    pdfButton.addEventListener('click', () => {
-        console.info('Detail-plan PDF download is not implemented yet.')
-        appendAnalysisMessage(output, 'PDFi allalaadimine ei ole veel ühendatud.', 'warning')
-    })
-    actions.appendChild(pdfButton)
+    panel.appendChild(actions)
 
     const status = createElement('div', 'analysis-status')
-    actions.appendChild(status)
-    panel.appendChild(actions)
+    panel.appendChild(status)
 
     const output = createElement('div', 'analysis-output')
     appendEmpty(output, 'Analüüsi tulemus ilmub siia pärast käivitamist.')
@@ -473,9 +491,33 @@ function appendDetailPlanAnalysis(parent, searchValue) {
     })
 }
 
+async function handleDetailPlanDownload(searchValue, fileType, button, output) {
+    const originalText = button.textContent
+    button.disabled = true
+    button.textContent = 'Laen'
+    output.replaceChildren()
+
+    try {
+        const { blob, filename } = await downloadDetailPlanFile(searchValue, fileType)
+        const href = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = href
+        link.download = filename
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        URL.revokeObjectURL(href)
+    } catch (error) {
+        appendAnalysisMessage(output, error.message, 'warning')
+    } finally {
+        button.disabled = false
+        button.textContent = originalText
+    }
+}
+
 function renderAnalysisLoading(parent, text) {
     parent.replaceChildren()
-    const loader = createElement('div', 'ai-loader compact')
+    const loader = createElement('div', 'ai-loader')
     appendText(loader, 'span', '', 'loader-orb')
     appendText(loader, 'strong', text)
     parent.appendChild(loader)
@@ -683,30 +725,6 @@ function renderEnvironment(parent, noiseLevels) {
         summary: 'Mürataseme hinnang kinnistul ja lähialas.',
     })
 
-    const toolbar = createElement('div', 'section-toolbar')
-    const noiseToggle = createElement('button', 'secondary-button', noiseOverlayVisible ? 'Peida müraala' : 'Näita müraala')
-    noiseToggle.type = 'button'
-    currentNoiseGeoJson = extractNoiseGeoJson(noiseLevels)
-    toolbar.appendChild(noiseToggle)
-    section.appendChild(toolbar)
-
-    noiseToggle.addEventListener('click', () => {
-        if (!currentNoiseGeoJson) {
-            console.info('Noise area GeoJSON is not available in the current payload.')
-            appendEmpty(section, 'Müraala GeoJSON puudub praeguses vastuses.')
-            return
-        }
-
-        noiseOverlayVisible = !noiseOverlayVisible
-        if (noiseOverlayVisible) {
-            setNoiseOverlay(map, currentNoiseGeoJson)
-            noiseToggle.textContent = 'Peida müraala'
-        } else {
-            clearNoiseOverlay(map)
-            noiseToggle.textContent = 'Näita müraala'
-        }
-    })
-
     if (!noiseLevels || typeof noiseLevels !== 'object') {
         appendEmpty(section, 'Müraandmeid ei ole saadaval.')
         parent.appendChild(section)
@@ -838,6 +856,263 @@ function appendWebsiteLink(parent, www) {
     parent.appendChild(link)
 }
 
+function addPoiSettingsRow(parent, query = {}) {
+    const row = createElement('div', 'poi-settings-row')
+    row.dataset.queryLabel = query.label || ''
+    appendText(row, 'span', query.label || 'Huvipunkt', 'poi-settings-label')
+
+    const limitInput = createElement('input')
+    limitInput.type = 'number'
+    limitInput.value = String(query.limit ?? 3)
+    limitInput.name = 'query-limit'
+    limitInput.inputMode = 'numeric'
+    limitInput.min = '0'
+    limitInput.max = '5'
+    limitInput.step = '1'
+    limitInput.addEventListener('input', () => {
+        syncPoiSettingsRow(row)
+        syncPoiSettingsCategory(row.closest('.poi-settings-category'))
+    })
+    row.appendChild(limitInput)
+
+    syncPoiSettingsRow(row)
+    parent.appendChild(row)
+}
+
+function poiCategoryIsDisabled(category) {
+    const queries = category?.queries || []
+    return Boolean(category?.['user-disabled']) || poiCategoryAllLimitsZero(category)
+}
+
+function poiCategoryAllLimitsZero(category) {
+    const queries = category?.queries || []
+    return queries.length > 0 && queries.every((query) => Number(query.limit || 0) === 0)
+}
+
+function poiCategoryHasExplicitDisabled(category) {
+    return Boolean(category?.['user-disabled']) && !poiCategoryAllLimitsZero(category)
+}
+
+function syncPoiSettingsRow(row) {
+    const value = Number(row.querySelector('[name="query-limit"]')?.value || 0)
+    row.classList.toggle('is-zero', value === 0)
+}
+
+function syncPoiSettingsCategory(categoryElement) {
+    if (!categoryElement) {
+        return
+    }
+
+    const inputs = [...categoryElement.querySelectorAll('[name="query-limit"]')]
+    const allZero = inputs.length > 0 && inputs.every((input) => Number(input.value || 0) === 0)
+    const userDisabled = categoryElement.dataset.userDisabled === 'true'
+    const disabled = userDisabled || allZero
+    categoryElement.classList.toggle('is-disabled', disabled)
+    categoryElement.querySelector('.poi-settings-disable')?.setAttribute('aria-pressed', String(disabled))
+}
+
+function setPoiSettingsCategoryDisabled(categoryElement, disabled) {
+    categoryElement.dataset.userDisabled = String(disabled)
+    syncPoiSettingsCategory(categoryElement)
+}
+
+function setPoiSettingsMessage(parent, text, type = 'warning') {
+    parent.querySelector('.poi-settings-message')?.remove()
+    if (!text) {
+        return
+    }
+
+    const message = createElement('p', `poi-settings-message ${type}`, text)
+    parent.appendChild(message)
+}
+
+function validatePoiSettingsForm(form, maxQueryLimit) {
+    for (const input of form.querySelectorAll('[name="query-limit"]')) {
+        const rawValue = input.value.trim()
+        const value = Number(rawValue)
+        if (!rawValue || !Number.isInteger(value) || value < 0 || value > maxQueryLimit) {
+            input.classList.add('is-invalid')
+            input.focus()
+            return false
+        }
+        input.classList.remove('is-invalid')
+    }
+    return true
+}
+
+function buildPoiSettingsFromForm(form, baseCategories) {
+    const categories = structuredClone(baseCategories)
+    for (const categoryElement of form.querySelectorAll('.poi-settings-category')) {
+        const categoryId = categoryElement.dataset.categoryId
+        const category = categories[categoryId]
+        if (!category) {
+            continue
+        }
+
+        category.queries = (category.queries || []).map((query, index) => ({
+            ...query,
+            limit: Number(categoryElement.querySelector(`[name="query-limit"][data-query-index="${index}"]`)?.value ?? query.limit ?? 3),
+        }))
+        categories[categoryId]['user-disabled'] = categoryElement.dataset.userDisabled === 'true'
+            || category.queries.every((query) => Number(query.limit || 0) === 0)
+    }
+    return categories
+}
+
+function renderPoiSettingsRows(rows, category) {
+    rows.replaceChildren()
+    ;(category.queries || []).forEach((query, index) => {
+        addPoiSettingsRow(rows, query)
+        rows.lastElementChild.querySelector('[name="query-limit"]').dataset.queryIndex = String(index)
+    })
+}
+
+function setPoiSettingsFormValues(form, categories) {
+    for (const categoryElement of form.querySelectorAll('.poi-settings-category')) {
+        const category = categories[categoryElement.dataset.categoryId]
+        if (!category) {
+            continue
+        }
+
+        ;(category.queries || []).forEach((query, index) => {
+            const input = categoryElement.querySelector(`[name="query-limit"][data-query-index="${index}"]`)
+            if (input) {
+                input.value = String(query.limit ?? 3)
+                input.classList.remove('is-invalid')
+                syncPoiSettingsRow(input.closest('.poi-settings-row'))
+            }
+        })
+        setPoiSettingsCategoryDisabled(categoryElement, poiCategoryHasExplicitDisabled(category))
+    }
+}
+
+function closePoiSettingsModal() {
+    document.querySelector('.poi-settings-backdrop')?.remove()
+}
+
+function setPoiSettingsCategoriesOpen(form, open) {
+    form.querySelectorAll('.poi-settings-category').forEach((categoryElement) => {
+        categoryElement.open = open
+    })
+}
+
+async function openPoiSettingsModal() {
+    const backdrop = createElement('div', 'poi-settings-backdrop')
+    const modal = createElement('div', 'poi-settings-modal')
+    backdrop.appendChild(modal)
+    document.body.appendChild(backdrop)
+
+    appendText(modal, 'h2', 'POI seaded')
+    appendEmpty(modal, 'Laen seadeid.')
+
+    try {
+        const settings = await getPoiSettings()
+        const defaultCategories = settings.default_poi_categories || settings.poi_categories || {}
+        const maxQueryLimit = settings.max_query_limit || 5
+        modal.replaceChildren()
+
+        const header = createElement('div', 'poi-settings-header')
+        appendText(header, 'h2', 'POI seaded')
+        const headerActions = createElement('div', 'poi-settings-header-actions')
+        const openAllButton = createElement('button', 'secondary-button', 'Ava kõik')
+        openAllButton.type = 'button'
+        headerActions.appendChild(openAllButton)
+        const closeAllButton = createElement('button', 'secondary-button', 'Sulge kõik')
+        closeAllButton.type = 'button'
+        headerActions.appendChild(closeAllButton)
+        const closeButton = createElement('button', 'secondary-button', 'Sulge')
+        closeButton.type = 'button'
+        closeButton.addEventListener('click', closePoiSettingsModal)
+        headerActions.appendChild(closeButton)
+        header.appendChild(headerActions)
+        modal.appendChild(header)
+
+        const form = createElement('form', 'poi-settings-form')
+        form.noValidate = true
+        openAllButton.addEventListener('click', () => setPoiSettingsCategoriesOpen(form, true))
+        closeAllButton.addEventListener('click', () => setPoiSettingsCategoriesOpen(form, false))
+        const categoriesGrid = createElement('div', 'poi-settings-grid')
+        for (const [categoryId, category] of Object.entries(settings.poi_categories || {})) {
+            const section = createElement('details', 'poi-settings-category')
+            section.dataset.categoryId = categoryId
+            section.open = true
+
+            const summary = createElement('summary', 'poi-settings-category-header')
+            const swatch = createElement('button', 'poi-swatch poi-settings-disable')
+            swatch.type = 'button'
+            swatch.style.backgroundColor = stableColorForLabel(category.label)
+            swatch.addEventListener('click', (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setPoiSettingsCategoryDisabled(section, section.dataset.userDisabled !== 'true')
+            })
+            summary.appendChild(swatch)
+            appendText(summary, 'span', category.label || categoryId)
+            section.appendChild(summary)
+
+            const rows = createElement('div', 'poi-settings-rows')
+            renderPoiSettingsRows(rows, category)
+            section.appendChild(rows)
+            setPoiSettingsCategoryDisabled(section, poiCategoryHasExplicitDisabled(category))
+            categoriesGrid.appendChild(section)
+        }
+        form.appendChild(categoriesGrid)
+
+        const footer = createElement('div', 'poi-settings-footer')
+        const resetButton = createElement('button', 'secondary-button', 'Lähtesta')
+        resetButton.type = 'button'
+        resetButton.addEventListener('click', () => {
+            setPoiSettingsFormValues(form, defaultCategories)
+            setPoiSettingsMessage(modal, '')
+        })
+        footer.appendChild(resetButton)
+
+        const saveButton = createElement('button', 'primary-button', 'Salvesta')
+        saveButton.type = 'submit'
+        footer.appendChild(saveButton)
+        form.appendChild(footer)
+        modal.appendChild(form)
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault()
+            setPoiSettingsMessage(modal, '')
+            if (!validatePoiSettingsForm(form, maxQueryLimit)) {
+                setPoiSettingsMessage(modal, `Sisesta igale reale täisarv vahemikus 0-${maxQueryLimit}.`)
+                return
+            }
+
+            saveButton.disabled = true
+            saveButton.textContent = 'Salvestan'
+            try {
+                await savePoiSettings(buildPoiSettingsFromForm(form, defaultCategories))
+                closePoiSettingsModal()
+                if (lastSearchValue || searchInput.value) {
+                    await handleParcelSearch(lastSearchValue || searchInput.value)
+                }
+            } catch (error) {
+                setPoiSettingsMessage(modal, error.message || 'Seadete salvestamine ebaõnnestus.', 'error')
+            } finally {
+                saveButton.disabled = false
+                saveButton.textContent = 'Salvesta'
+            }
+        })
+
+        backdrop.addEventListener('click', (event) => {
+            if (event.target === backdrop) {
+                closePoiSettingsModal()
+            }
+        })
+    } catch (error) {
+        modal.replaceChildren()
+        appendText(modal, 'h2', 'POI seaded')
+        appendAnalysisMessage(modal, error.message, 'error')
+        const closeButton = createElement('button', 'secondary-button', 'Sulge')
+        closeButton.type = 'button'
+        closeButton.addEventListener('click', closePoiSettingsModal)
+        modal.appendChild(closeButton)
+    }
+}
+
 function renderPoiItem(parent, categoryId, group, item, index, toggle) {
     const feature = currentPoiFeaturesByKey.get(poiKey(categoryId, index))
     const listItem = createElement('li', 'poi-list-item')
@@ -884,6 +1159,16 @@ function renderNearby(parent, nearbyPois) {
     toggle.type = 'button'
     toggle.disabled = !currentPoiCollection.features.length
     toolbar.appendChild(toggle)
+    const settingsButton = createElement('button', 'secondary-button', 'Seadista')
+    settingsButton.type = 'button'
+    settingsButton.addEventListener('click', openPoiSettingsModal)
+    toolbar.appendChild(settingsButton)
+    const openAllButton = createElement('button', 'secondary-button', 'Ava kõik')
+    openAllButton.type = 'button'
+    toolbar.appendChild(openAllButton)
+    const closeAllButton = createElement('button', 'secondary-button', 'Sulge kõik')
+    closeAllButton.type = 'button'
+    toolbar.appendChild(closeAllButton)
     section.appendChild(toolbar)
 
     toggle.addEventListener('click', () => {
@@ -905,8 +1190,9 @@ function renderNearby(parent, nearbyPois) {
 
     const groupList = createElement('div', 'poi-groups')
     for (const [categoryId, group, items] of groups) {
-        const category = createElement('article', 'poi-group')
-        const header = createElement('div', 'poi-group-header')
+        const category = createElement('details', 'poi-group')
+        category.open = true
+        const header = createElement('summary', 'poi-group-header')
         const swatch = createElement('span', 'poi-swatch')
         swatch.style.backgroundColor = stableColorForLabel(group.label)
         header.appendChild(swatch)
@@ -934,6 +1220,16 @@ function renderNearby(parent, nearbyPois) {
     }
 
     section.appendChild(groupList)
+    openAllButton.addEventListener('click', () => {
+        groupList.querySelectorAll('.poi-group').forEach((groupElement) => {
+            groupElement.open = true
+        })
+    })
+    closeAllButton.addEventListener('click', () => {
+        groupList.querySelectorAll('.poi-group').forEach((groupElement) => {
+            groupElement.open = false
+        })
+    })
     parent.appendChild(section)
 }
 
@@ -988,6 +1284,7 @@ async function handleParcelSearch(value) {
     if (!trimmedValue) {
         return
     }
+    lastSearchValue = trimmedValue
 
     searchButton.disabled = true
     searchButton.textContent = 'Otsin'
@@ -1034,7 +1331,7 @@ function updateAddressSuggestions() {
         return
     }
 
-    const suggestions = getAddressSuggestions(map, query, 6)
+    const suggestions = getAddressSuggestions(map, query, 20)
     currentAddressSuggestions = suggestions
 
     if (suggestions.length || document.activeElement === searchInput) {

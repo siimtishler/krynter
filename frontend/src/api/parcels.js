@@ -1,4 +1,4 @@
-import { apiGet } from "./client.js"
+import { apiDownload, apiGet, apiPut } from "./client.js"
 import { classifyParcelSearchInput } from "../utils/utils.js"
 
 
@@ -26,4 +26,25 @@ export async function analyzeDetailPlan(searchInput, options = {}) {
 	}
 
 	return apiGet(`/api/detail-plan-analysis?${query}`)
+}
+
+export async function downloadDetailPlanFile(searchInput, fileType) {
+	const searchInputClassified = classifyParcelSearchInput(searchInput)
+	const query = new URLSearchParams({
+		searchable: searchInputClassified.value,
+		type: searchInputClassified.type,
+		file_type: fileType,
+	})
+
+	return apiDownload(`/api/detail-plan-file?${query}`)
+}
+
+export async function getPoiSettings() {
+	return apiGet('/api/poi-settings')
+}
+
+export async function savePoiSettings(poiCategories) {
+	return apiPut('/api/poi-settings', {
+		poi_categories: poiCategories,
+	})
 }

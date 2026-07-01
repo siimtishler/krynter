@@ -104,7 +104,8 @@ a:focus-visible {
   box-shadow: 0 16px 34px rgb(15 23 42 / 18%);
   display: grid;
   left: 14px;
-  overflow: hidden;
+  max-height: 234px;
+  overflow-y: auto;
   position: absolute;
   right: 86px;
   top: 92px;
@@ -394,6 +395,7 @@ button:disabled {
 
 .section-toolbar {
   display: flex;
+  gap: 10px;
   justify-content: flex-end;
   margin-top: 12px;
 }
@@ -402,6 +404,19 @@ button:disabled {
   border-top: 1px solid #e5ebf2;
   margin-top: 14px;
   padding-top: 14px;
+}
+
+.download-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.download-message {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .analysis-actions {
@@ -414,6 +429,8 @@ button:disabled {
 
 .analysis-status {
   min-height: 38px;
+  margin-top: 10px;
+  width: 100%;
 }
 
 .analysis-output {
@@ -602,7 +619,7 @@ button:disabled {
 }
 
 .noise-meter {
-  background: linear-gradient(90deg, #22c55e, #facc15, #ef4444, #7e22ce);
+  background: linear-gradient(90deg, #22c55e, #84cc16, #facc15, #f97316, #ef4444, #7e22ce);
   border-radius: 999px;
   height: 10px;
   position: relative;
@@ -628,8 +645,26 @@ button:disabled {
 
 .poi-group-header {
   align-items: center;
+  cursor: pointer;
   display: flex;
   gap: 8px;
+  list-style: none;
+}
+
+.poi-group-header::-webkit-details-marker {
+  display: none;
+}
+
+.poi-group-header::after {
+  color: var(--muted);
+  content: "Ava";
+  font-size: 12px;
+  font-weight: 800;
+  margin-left: auto;
+}
+
+.poi-group[open] .poi-group-header::after {
+  content: "Sulge";
 }
 
 .poi-swatch {
@@ -713,6 +748,186 @@ button:disabled {
   text-decoration: underline;
 }
 
+.poi-settings-backdrop {
+  align-items: center;
+  background: rgb(15 23 42 / 34%);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 60;
+}
+
+.poi-settings-modal {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  display: grid;
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  width: min(920px, 100%);
+}
+
+.poi-settings-header,
+.poi-settings-footer {
+  align-items: center;
+  background: #ffffff;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 14px 16px;
+  position: sticky;
+  z-index: 2;
+}
+
+.poi-settings-header {
+  border-bottom: 1px solid #e5ebf2;
+  top: 0;
+}
+
+.poi-settings-footer {
+  border-top: 1px solid #e5ebf2;
+  bottom: 0;
+}
+
+.poi-settings-header h2 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.poi-settings-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.poi-settings-form {
+  display: grid;
+}
+
+.poi-settings-grid {
+  column-count: 2;
+  column-gap: 10px;
+  padding: 14px 16px;
+}
+
+.poi-settings-category {
+  border: 1px solid #e5ebf2;
+  border-radius: 8px;
+  break-inside: avoid;
+  margin: 0 0 10px;
+  padding: 10px;
+}
+
+.poi-settings-category.is-disabled {
+  background: #f3f4f6;
+}
+
+.poi-settings-category-header {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-weight: 800;
+  gap: 8px;
+  list-style: none;
+}
+
+.poi-settings-category-header::-webkit-details-marker {
+  display: none;
+}
+
+.poi-settings-category-header::after {
+  color: var(--muted);
+  content: "Ava";
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.poi-settings-category[open] .poi-settings-category-header::after {
+  content: "Sulge";
+}
+
+.poi-settings-disable {
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.poi-settings-category.is-disabled .poi-settings-disable {
+  background: #94a3b8 !important;
+}
+
+.poi-settings-category.is-disabled .poi-settings-category-header span:not(.poi-swatch) {
+  color: #94a3b8;
+}
+
+.poi-settings-row input {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-width: 0;
+  padding: 8px 9px;
+  width: 100%;
+}
+
+.poi-settings-row input.is-invalid {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px rgb(185 28 28 / 13%);
+}
+
+.poi-settings-rows {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.poi-settings-row {
+  align-items: center;
+  display: grid;
+  gap: 7px;
+  grid-template-columns: minmax(0, 1fr) 72px;
+}
+
+.poi-settings-row.is-zero {
+  background: #f1f5f9;
+  border-radius: 6px;
+  padding: 5px;
+}
+
+.poi-settings-row.is-zero .poi-settings-label,
+.poi-settings-row.is-zero input {
+  color: #94a3b8;
+}
+
+.poi-settings-label {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.poi-settings-footer {
+  justify-content: flex-end;
+}
+
+.poi-settings-message {
+  border-radius: 7px;
+  font-size: 13px;
+  margin: 0;
+  padding: 10px;
+}
+
+.poi-settings-message.warning {
+  background: #fef3c7;
+  color: var(--warning);
+}
+
+.poi-settings-message.error {
+  background: #fee2e2;
+  color: var(--danger);
+}
+
 [debug].debug-hidden {
   display: none !important;
 }
@@ -749,5 +964,11 @@ button:disabled {
   50% {
     box-shadow: 0 0 0 7px rgb(37 99 235 / 0%);
     transform: scale(1.05);
+  }
+}
+
+@media (max-width: 760px) {
+  .poi-settings-grid {
+    column-count: 1;
   }
 }
