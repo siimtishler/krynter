@@ -44,12 +44,12 @@ from backend.geo.crs import ensure_data_crs  # noqa: E402
 DEFAULT_GPKG = (
     config.detail_plans_file
     if config.detail_plans_file.exists()
-    else PROJECT_ROOT / "data" / "detail_plans_tln.gpkg"
+    else PROJECT_ROOT / "data" / "detail_plans.gpkg"
 )
 DEFAULT_CADASTRE_GPKG = (
     config.cadastre_file
     if config.cadastre_file.exists()
-    else PROJECT_ROOT / "data" / "Tallinn_KATASTER_GPKG2.gpkg"
+    else PROJECT_ROOT / "data" / "cadastre.gpkg"
 )
 
 
