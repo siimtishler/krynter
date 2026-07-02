@@ -290,15 +290,21 @@ def test_regex_extracts_building_right_fields(tmp_path):
     result = extract_building_rights([chunk])
     fields = result.fields
 
-    assert fields["krundi_pind_m2"].value == 1200
-    assert fields["taisehitus_pct"].value == 25.5
-    assert fields["brutopind_m2"].value == 1500.5
+    assert fields["krundi_pind_m2"].value is None
+    assert fields["krundi_pind_m2"].candidates[0].value == 1200
+    assert fields["taisehitus_pct"].value is None
+    assert fields["taisehitus_pct"].candidates[0].value == 25.5
+    assert fields["brutopind_m2"].value is None
+    assert fields["brutopind_m2"].candidates[0].value == 1500.5
     assert fields["ehitusalune_pind_m2"].value == 440
     assert fields["lubatud_korrused"].value == "väikeelamul 2, kortermajal kuni 3"
-    assert fields["lubatud_majade_ehitamise_arv"].value == 3
-    assert fields["hoonete_lubatud_korgused_m"].value == "väikeelamul 9 m"
+    assert "lubatud_majade_ehitamise_arv" not in fields
+    assert fields["hoonete_lubatud_korgused_m"].value is None
+    assert fields["hoonete_lubatud_korgused_m"].candidates[0].value == "väikeelamul 9 m"
     assert fields["hoonete_arv"].value == 3
-    assert fields["kasutusotstarve"].value == "elamumaa, ärimaa"
+    assert fields["hoonete_arv"].label == "Lubatud hoonete arv"
+    assert "kasutusotstarve" not in fields
+    assert "omandivorm" not in fields
     assert fields["katusekalle"].value == "0-45"
     assert fields["tulepusivusklass"].value == "TP-3"
 
@@ -318,10 +324,11 @@ def test_regex_korruselisus_does_not_use_height_line_number(tmp_path):
 
     result = extract_building_rights([chunk])
 
-    assert result.fields["lubatud_korrused"].value == (
-        "vaikeelamul 2, kortermajal kuni 3"
-    )
-    assert result.fields["lubatud_korrused"].value != 7
+    field = result.fields["lubatud_korrused"]
+
+    assert field.value is None
+    assert field.candidates[0].value == "vaikeelamul 2, kortermajal kuni 3"
+    assert field.candidates[0].value != 7
 
 
 def test_regex_extracts_roof_pitch_alternatives_and_kinnistu_size(tmp_path):
@@ -344,9 +351,11 @@ def test_regex_extracts_roof_pitch_alternatives_and_kinnistu_size(tmp_path):
     result = extract_building_rights([chunk])
     fields = result.fields
 
-    assert fields["krundi_pind_m2"].value == 1421
-    assert fields["kasutusotstarve"].value == "elamumaa"
-    assert fields["katusekalle"].value == "0-13 või 45-48"
+    assert fields["krundi_pind_m2"].value is None
+    assert fields["krundi_pind_m2"].candidates[0].value == 1421
+    assert "kasutusotstarve" not in fields
+    assert fields["katusekalle"].value is None
+    assert fields["katusekalle"].candidates[0].value == "0-13 või 45-48"
 
 
 def test_regex_preserves_all_candidates_and_marks_conflict(tmp_path):
@@ -364,7 +373,7 @@ def test_regex_preserves_all_candidates_and_marks_conflict(tmp_path):
     assert field.value is None
     assert [candidate.value for candidate in field.candidates] == [25, 30]
     assert field.candidates[0].rank == 1
-    assert field.candidates[0].quality == "strong"
+    assert field.candidates[0].quality == "candidate"
     assert field.candidates[0].score is not None
     assert field.needs_review
 
@@ -482,7 +491,7 @@ def test_maximum_building_height_beats_fence_height_candidate(tmp_path):
     assert "not_building_height" in fence_candidates[0].flags
 
 
-def test_cadastre_context_fills_missing_area_land_use_and_ownership():
+def test_cadastre_context_fills_missing_area_without_land_use_or_ownership_fields():
     result = extract_building_rights(
         [],
         parcel_attributes={
@@ -497,11 +506,11 @@ def test_cadastre_context_fills_missing_area_land_use_and_ownership():
 
     assert fields["krundi_pind_m2"].value == 1424
     assert fields["krundi_pind_m2"].source_type == "cadastre"
-    assert fields["kasutusotstarve"].value == "elamumaa 100%"
-    assert fields["omandivorm"].value == "Eraomand"
+    assert "kasutusotstarve" not in fields
+    assert "omandivorm" not in fields
 
 
-def test_cadastre_land_use_and_ownership_skip_regex_when_context_exists(tmp_path):
+def test_land_use_and_ownership_are_not_analyzer_fields(tmp_path):
     chunk = TextChunk(
         pdf_path=tmp_path / "plan.pdf",
         page=1,
@@ -521,12 +530,8 @@ def test_cadastre_land_use_and_ownership_skip_regex_when_context_exists(tmp_path
         },
     )
 
-    assert result.fields["kasutusotstarve"].value == "elamumaa 75%, arimaa 25%"
-    assert result.fields["kasutusotstarve"].source_type == "cadastre"
-    assert len(result.fields["kasutusotstarve"].candidates) == 1
-    assert result.fields["kasutusotstarve"].needs_review == []
-    assert result.fields["omandivorm"].value == "Eraomand"
-    assert result.fields["omandivorm"].source_type == "cadastre"
+    assert "kasutusotstarve" not in result.fields
+    assert "omandivorm" not in result.fields
 
 
 def test_pdf_area_is_preferred_when_close_to_cadastre_and_derived_values_verify(
@@ -556,9 +561,32 @@ def test_pdf_area_is_preferred_when_close_to_cadastre_and_derived_values_verify(
         candidate.source_type == "cadastre"
         for candidate in fields["krundi_pind_m2"].candidates
     )
-    assert fields["ehitusalune_pind_m2"].value == 241
-    assert not fields["ehitusalune_pind_m2"].needs_review
-    assert not fields["taisehitus_pct"].needs_review
+    assert fields["ehitusalune_pind_m2"].value is None
+    assert fields["ehitusalune_pind_m2"].candidates[0].value == 241
+    assert fields["ehitusalune_pind_m2"].needs_review
+    assert fields["taisehitus_pct"].needs_review
+
+
+def test_cadastre_area_overrides_pdf_area_when_difference_is_significant(tmp_path):
+    chunk = TextChunk(
+        pdf_path=tmp_path / "plan.pdf",
+        page=3,
+        text="Raudtee tn 109 kinnistu on suurusega 1200 m².\n",
+        score=10,
+        reasons=["test"],
+    )
+
+    result = extract_building_rights(
+        [chunk],
+        parcel_attributes={"pindala": 1424},
+    )
+    field = result.fields["krundi_pind_m2"]
+
+    assert field.value == 1424
+    assert field.source_type == "cadastre"
+    assert any(candidate.value == 1200 for candidate in field.candidates)
+    assert any(candidate.source_type == "cadastre" for candidate in field.candidates)
+    assert field.needs_review
 
 
 def test_missing_footprint_and_coverage_are_derived(tmp_path):
@@ -571,8 +599,8 @@ def test_missing_footprint_and_coverage_are_derived(tmp_path):
     )
     footprint_result = extract_building_rights([footprint_missing])
 
-    assert footprint_result.fields["ehitusalune_pind_m2"].value == 250
-    assert footprint_result.fields["ehitusalune_pind_m2"].source_type == "derived"
+    assert footprint_result.fields["ehitusalune_pind_m2"].value is None
+    assert footprint_result.fields["ehitusalune_pind_m2"].needs_review
 
     coverage_missing = TextChunk(
         pdf_path=tmp_path / "plan.pdf",
@@ -583,8 +611,8 @@ def test_missing_footprint_and_coverage_are_derived(tmp_path):
     )
     coverage_result = extract_building_rights([coverage_missing])
 
-    assert coverage_result.fields["taisehitus_pct"].value == 25
-    assert coverage_result.fields["taisehitus_pct"].source_type == "derived"
+    assert coverage_result.fields["taisehitus_pct"].value is None
+    assert coverage_result.fields["taisehitus_pct"].needs_review
 
 
 def test_building_count_derives_from_safe_floor_building_type_text(tmp_path):
@@ -598,9 +626,9 @@ def test_building_count_derives_from_safe_floor_building_type_text(tmp_path):
 
     result = extract_building_rights([chunk])
 
-    assert result.fields["lubatud_majade_ehitamise_arv"].value == 2
-    assert result.fields["lubatud_majade_ehitamise_arv"].source_type == "derived"
+    assert "lubatud_majade_ehitamise_arv" not in result.fields
     assert result.fields["hoonete_arv"].value == 2
+    assert result.fields["hoonete_arv"].source_type == "derived"
 
 
 def test_building_count_is_not_derived_from_ambiguous_floor_alternatives(tmp_path):
@@ -614,7 +642,7 @@ def test_building_count_is_not_derived_from_ambiguous_floor_alternatives(tmp_pat
 
     result = extract_building_rights([chunk])
 
-    assert result.fields["lubatud_majade_ehitamise_arv"].value is None
+    assert "lubatud_majade_ehitamise_arv" not in result.fields
     assert result.fields["hoonete_arv"].value is None
 
 
@@ -761,7 +789,7 @@ def test_enabled_llm_resolver_applies_accepted_candidate(monkeypatch, tmp_path):
     )
 
 
-def test_llm_resolver_skips_parcel_backed_land_use_and_ownership(
+def test_llm_resolver_has_no_land_use_or_ownership_fields(
     monkeypatch,
     tmp_path,
 ):
@@ -813,8 +841,8 @@ def test_llm_resolver_skips_parcel_backed_land_use_and_ownership(
 
     assert "kasutusotstarve" not in provider.field_keys
     assert "omandivorm" not in provider.field_keys
-    assert response.building_right.fields["kasutusotstarve"].source_type == "cadastre"
-    assert response.building_right.fields["omandivorm"].source_type == "cadastre"
+    assert "kasutusotstarve" not in response.building_right.fields
+    assert "omandivorm" not in response.building_right.fields
 
 
 def test_invalid_llm_resolution_leaves_regex_field_unchanged(tmp_path):

@@ -19,6 +19,8 @@ from backend.detailplan_analyzer.models import (
 )
 
 ValueParser = Callable[[str], Any]
+PDF_REGEX_CONFIDENCE_CAP = 0.72
+PDF_MANUAL_CONFIDENCE_CAP = 0.78
 
 
 @dataclass(frozen=True)
@@ -209,28 +211,6 @@ def parse_text(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip(" :;-.,")).strip()
 
 
-def parse_land_use(value: str) -> str:
-    cleaned = parse_text(value)
-    low = cleaned.lower()
-    if low in {"ja suurus", "ning suurus", "suurus"}:
-        raise ValueError("Heading fragment is not a land-use value")
-
-    parenthesized = re.search(
-        r"\(([^)]*(?:maa|eramu|elamu|äri|tootmis|ühiskond)[^)]*)\)",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
-    if parenthesized:
-        cleaned = parenthesized.group(1)
-
-    cleaned = re.split(r"\s+ei\s+", cleaned, maxsplit=1, flags=re.IGNORECASE)[0]
-    cleaned = parse_text(cleaned)
-    cleaned = re.sub(r"^on\s+", "", cleaned, flags=re.IGNORECASE)
-    if not cleaned:
-        raise ValueError("Empty land-use value")
-    return normalize_land_use_text(cleaned)
-
-
 def parse_code(value: str) -> str:
     return parse_text(value).upper().replace(" ", "")
 
@@ -252,13 +232,6 @@ def clean_building_height_value(value: Any) -> str:
     if re.fullmatch(r"\d+(?:[,.]\d+)?\s*m\b.*", cleaned, flags=re.IGNORECASE):
         cleaned = re.sub(r"\s*m\b.*$", "", cleaned, flags=re.IGNORECASE).strip()
     return cleaned or parse_text(str(value))
-
-
-def normalize_land_use_text(value: str) -> str:
-    cleaned = parse_text(value)
-    cleaned = re.sub(r"\s*%\s*", "%", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    return cleaned.lower()
 
 
 def _line_for_match(text: str, match: re.Match) -> str:
@@ -413,7 +386,7 @@ def _candidate_from_match(
         value=value,
         raw_value=parse_text(raw),
         unit=spec.unit,
-        confidence=regex.confidence,
+        confidence=min(regex.confidence, PDF_REGEX_CONFIDENCE_CAP),
         pattern_name=regex.name,
         evidence=Evidence(
             pdf=chunk.pdf_path.name,
@@ -470,11 +443,6 @@ FIELD_WEAK_CONTEXT_TERMS: dict[str, tuple[str, ...]] = {
         "tagasi",
         "tagasiaste",
         "maapinnast on 1",
-    ),
-    "kasutusotstarve": (
-        "senine sihtotstarve",
-        "olemasolev sihtotstarve",
-        "sihtotstarvete kaupa",
     ),
 }
 
@@ -827,24 +795,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         ),
     ),
     FieldSpec(
-        key="lubatud_majade_ehitamise_arv",
-        label="Lubatud majade ehitamise arv",
-        unit=None,
-        parser=parse_int,
-        patterns=(
-            RegexPattern(
-                "lubatud_hoonete_arv",
-                r"\blubatud(?:\s+eraldiseisvate)?\s+(?:hoonete|majade)\s+arv\D{0,30}(?P<value>\d+)",
-                0.95,
-            ),
-            RegexPattern(
-                "lubatud_ehitada_hoonet",
-                r"\blubatud.{0,50}\behitada\D{0,40}(?P<value>\d+)\s+(?:hoonet|maja)",
-                0.75,
-            ),
-        ),
-    ),
-    FieldSpec(
         key="hoonete_lubatud_korgused_m",
         label="Hoonete lubatud kõrgused",
         unit="m",
@@ -864,10 +814,20 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         key="hoonete_arv",
-        label="Hoonete arv",
+        label="Lubatud hoonete arv",
         unit=None,
         parser=parse_int,
         patterns=(
+            RegexPattern(
+                "lubatud_hoonete_arv",
+                r"\blubatud(?:\s+eraldiseisvate)?\s+(?:hoonete|majade)\s+arv\D{0,30}(?P<value>\d+)",
+                0.95,
+            ),
+            RegexPattern(
+                "lubatud_ehitada_hoonet",
+                r"\blubatud.{0,50}\behitada\D{0,40}(?P<value>\d+)\s+(?:hoonet|maja)",
+                0.75,
+            ),
             RegexPattern(
                 "hoonete_arv",
                 r"\bhoonete\s+arv\D{0,30}(?P<value>\d+)",
@@ -877,24 +837,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
                 "planeeritud_hoonet",
                 r"\bplaneeritud\s+(?P<value>\d+)\s+hoonet",
                 0.7,
-            ),
-        ),
-    ),
-    FieldSpec(
-        key="kasutusotstarve",
-        label="Kasutusotstarve/sihtotstarve",
-        unit=None,
-        parser=parse_land_use,
-        patterns=(
-            RegexPattern(
-                "sihtotstarve",
-                r"\b(?:maakasutuse\s+)?sihtotstarve\s*[:：-]?\s*(?P<value>[^\n.;]{3,140})",
-                0.95,
-            ),
-            RegexPattern(
-                "kasutusotstarve",
-                r"\bkasutusotstarve\s*[:：-]?\s*(?P<value>[^\n.;]{3,140})",
-                0.9,
             ),
         ),
     ),
@@ -934,24 +876,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
             ),
         ),
     ),
-    FieldSpec(
-        key="omandivorm",
-        label="Omandivorm",
-        unit=None,
-        parser=parse_text,
-        patterns=(
-            RegexPattern(
-                "omandivorm",
-                r"\bomandivorm\s*[:：-]?\s*(?P<value>[^\n.;]{3,80})",
-                0.9,
-            ),
-            RegexPattern(
-                "known_omandivorm",
-                r"\b(?P<value>eraomand|eramaa|munitsipaalomand|riigiomand)\b",
-                0.6,
-            ),
-        ),
-    ),
 )
 
 
@@ -985,7 +909,7 @@ def _manual_regex_candidate(
         value=value,
         raw_value=parse_text(raw),
         unit=spec.unit,
-        confidence=confidence,
+        confidence=min(confidence, PDF_MANUAL_CONFIDENCE_CAP),
         pattern_name=pattern_name,
         evidence=Evidence(
             pdf=chunk.pdf_path.name,
@@ -1188,8 +1112,8 @@ def _targeted_window_candidates(
                 )
                 if pitch is not None:
                     pitch_value = re.search(
-                        rf"(?P<value>{NUMBER_TOKEN_PATTERN}\s*[˚°]?\s*[-–]\s*"
-                        rf"{NUMBER_TOKEN_PATTERN}\s*[˚°]?)",
+                        rf"(?P<value>{NUMBER_TOKEN_PATTERN}\s*[˚°Oo]?\s*[-–]\s*"
+                        rf"{NUMBER_TOKEN_PATTERN}\s*[˚°Oo]?)",
                         window[pitch.end() : pitch.end() + 180],
                         flags=re.IGNORECASE,
                     )
@@ -1199,7 +1123,7 @@ def _targeted_window_candidates(
                     if address_match is not None:
                         pitch_value = re.search(
                             rf"(?P<value>{NUMBER_TOKEN_PATTERN}\s*[˚°]?\s*[-–]\s*"
-                            rf"{NUMBER_TOKEN_PATTERN}\s*[˚°]?)",
+                            rf"{NUMBER_TOKEN_PATTERN}\s*[˚°Oo]?)",
                             line[address_match.end() : address_match.end() + 120],
                             flags=re.IGNORECASE,
                         )
@@ -1490,59 +1414,6 @@ def _cadastre_area_candidate(
     )
 
 
-def _cadastre_land_use(parcel_context: dict[str, Any]) -> str | None:
-    parts: list[str] = []
-    for index in range(1, 4):
-        use = parcel_context.get(f"siht{index}")
-        if not use:
-            continue
-        value = normalize_land_use_text(str(use))
-        pct = _float_or_none(parcel_context.get(f"so_prts{index}"))
-        if pct and pct > 0:
-            value = f"{value} {_format_number(pct)}%"
-        parts.append(value)
-    return ", ".join(parts) if parts else None
-
-
-def _cadastre_land_use_candidate(
-    field: ExtractedField,
-    parcel_context: dict[str, Any],
-) -> RegexCandidate | None:
-    land_use = _cadastre_land_use(parcel_context)
-    if not land_use:
-        return None
-    return _make_candidate(
-        field=field,
-        value=land_use,
-        unit=None,
-        source_type=SourceType.CADASTRE,
-        pattern_name="cadastre_sihtotstarve",
-        evidence_text=f"Katastri sihtotstarve: {land_use}.",
-        confidence=0.85,
-        raw_value=land_use,
-    )
-
-
-def _cadastre_ownership_candidate(
-    field: ExtractedField,
-    parcel_context: dict[str, Any],
-) -> RegexCandidate | None:
-    ownership = parcel_context.get("omvorm")
-    if not ownership:
-        return None
-    value = parse_text(str(ownership))
-    return _make_candidate(
-        field=field,
-        value=value,
-        unit=None,
-        source_type=SourceType.CADASTRE,
-        pattern_name="cadastre_omvorm",
-        evidence_text=f"Katastri omandivorm: {value}.",
-        confidence=0.85,
-        raw_value=value,
-    )
-
-
 def _enrich_from_cadastre(
     fields: dict[str, ExtractedField],
     parcel_context: dict[str, Any],
@@ -1552,12 +1423,25 @@ def _enrich_from_cadastre(
         candidate = _cadastre_area_candidate(area_field, parcel_context)
         if candidate is not None:
             _add_candidate(area_field, candidate)
+            pdf_candidate = next(
+                (
+                    item
+                    for item in area_field.candidates
+                    if item.source_type != SourceType.CADASTRE
+                    and _float_or_none(item.value) is not None
+                ),
+                None,
+            )
             pdf_area = _float_or_none(area_field.value)
+            if pdf_area is None and pdf_candidate is not None:
+                pdf_area = _float_or_none(pdf_candidate.value)
             cadastre_area = _float_or_none(candidate.value)
-            if not _field_has_value(area_field):
-                _use_candidate(area_field, candidate)
-            elif pdf_area is not None and cadastre_area is not None:
-                if not _values_close(pdf_area, cadastre_area, absolute=25, ratio=0.02):
+            if pdf_area is not None and cadastre_area is not None:
+                if _values_close(pdf_area, cadastre_area, absolute=25, ratio=0.02):
+                    if not _field_has_value(area_field) and pdf_candidate is not None:
+                        _use_candidate(area_field, pdf_candidate)
+                else:
+                    _use_candidate(area_field, candidate)
                     _review(
                         area_field,
                         (
@@ -1567,22 +1451,8 @@ def _enrich_from_cadastre(
                         ),
                         candidate.evidence,
                     )
-
-    land_use_field = fields.get("kasutusotstarve")
-    if land_use_field is not None:
-        candidate = _cadastre_land_use_candidate(land_use_field, parcel_context)
-        if candidate is not None:
-            _add_candidate(land_use_field, candidate)
-            if not _field_has_value(land_use_field):
-                _use_candidate(land_use_field, candidate)
-
-    ownership_field = fields.get("omandivorm")
-    if ownership_field is not None:
-        candidate = _cadastre_ownership_candidate(ownership_field, parcel_context)
-        if candidate is not None:
-            _add_candidate(ownership_field, candidate)
-            if not _field_has_value(ownership_field):
-                _use_candidate(ownership_field, candidate)
+            elif not _field_has_value(area_field):
+                _use_candidate(area_field, candidate)
 
 
 def _derived_evidence(text: str) -> Evidence:
@@ -1722,37 +1592,36 @@ def _enrich_building_counts(fields: dict[str, ExtractedField]) -> None:
 
     count, source_evidence = source
     evidence_text = f"Tuletatud hoonetüüpidest: {source_evidence.text}"
-    for key in ("lubatud_majade_ehitamise_arv", "hoonete_arv"):
-        field = fields.get(key)
-        if field is None:
-            continue
-        candidate = _make_candidate(
-            field=field,
-            value=count,
-            unit=None,
-            source_type=SourceType.DERIVED,
-            pattern_name="derived_from_floor_building_types",
-            evidence_text=evidence_text,
-            confidence=0.65,
-            pdf=source_evidence.pdf,
-            page=source_evidence.page,
-            raw_value=str(count),
-        )
-        _add_candidate(field, candidate)
-        if not _field_has_value(field):
-            _use_candidate(field, candidate)
-            continue
+    field = fields.get("hoonete_arv")
+    if field is None:
+        return
+    candidate = _make_candidate(
+        field=field,
+        value=count,
+        unit=None,
+        source_type=SourceType.DERIVED,
+        pattern_name="derived_from_floor_building_types",
+        evidence_text=evidence_text,
+        confidence=0.65,
+        pdf=source_evidence.pdf,
+        page=source_evidence.page,
+        raw_value=str(count),
+    )
+    _add_candidate(field, candidate)
+    if not _field_has_value(field):
+        _use_candidate(field, candidate)
+        return
 
-        existing_count = _float_or_none(field.value)
-        if existing_count is not None and int(existing_count) != count:
-            _review(
-                field,
-                (
-                    "Hoonete arv erineb korruselisuse tekstist tuletatud arvust: "
-                    f"väljal {int(existing_count)}, tuletatud {count}."
-                ),
-                candidate.evidence,
-            )
+    existing_count = _float_or_none(field.value)
+    if existing_count is not None and int(existing_count) != count:
+        _review(
+            field,
+            (
+                "Hoonete arv erineb korruselisuse tekstist tuletatud arvust: "
+                f"väljal {int(existing_count)}, tuletatud {count}."
+            ),
+            candidate.evidence,
+        )
 
 
 def _refresh_section_reviews(section: BuildingRightSection) -> None:
@@ -1774,26 +1643,6 @@ def enrich_building_rights(
     return section
 
 
-def _context_backed_field(
-    spec: FieldSpec,
-    parcel_context: dict[str, Any],
-) -> ExtractedField | None:
-    if spec.key not in {"kasutusotstarve", "omandivorm"}:
-        return None
-
-    field = ExtractedField(key=spec.key, label=spec.label, unit=spec.unit)
-    candidate: RegexCandidate | None = None
-    if spec.key == "kasutusotstarve":
-        candidate = _cadastre_land_use_candidate(field, parcel_context)
-    elif spec.key == "omandivorm":
-        candidate = _cadastre_ownership_candidate(field, parcel_context)
-
-    if candidate is None:
-        return None
-    _use_candidate(field, candidate)
-    return field
-
-
 @time_function
 def extract_building_rights(
     chunks: list[TextChunk],
@@ -1812,14 +1661,12 @@ def extract_building_rights(
         parse_detail_address(target_address) if target_address else None
     )
     for spec in field_specs:
-        field = _context_backed_field(spec, parcel_context)
-        if field is None:
-            candidates = extract_field_candidates(
-                chunks,
-                spec,
-                target_address=parsed_target_address,
-            )
-            field = extracted_field_from_candidates(spec, candidates)
+        candidates = extract_field_candidates(
+            chunks,
+            spec,
+            target_address=parsed_target_address,
+        )
+        field = extracted_field_from_candidates(spec, candidates)
         fields[spec.key] = field
         reviews.extend(field.needs_review)
 

@@ -21,8 +21,6 @@ TOPIC_KEYWORDS = {
     "krundi suurus": 6,
     "krundi pind": 6,
     "pindala": 4,
-    "sihtotstarve": 5,
-    "kasutusotstarve": 5,
     "korrus": 4,
     "täisehitus": 7,
     "ehitisealune": 6,
@@ -93,11 +91,6 @@ FIELD_WINDOW_KEYWORDS: dict[str, tuple[str, ...]] = {
         "korruseline",
         "korrust",
     ),
-    "lubatud_majade_ehitamise_arv": (
-        "lubatud hoonete arv",
-        "lubatud majade arv",
-        "lubatud ehitada",
-    ),
     "hoonete_lubatud_korgused_m": (
         "hoonestuse kõrgus",
         "hoone kõrgus",
@@ -106,14 +99,12 @@ FIELD_WINDOW_KEYWORDS: dict[str, tuple[str, ...]] = {
         "lubatud kõrgus",
     ),
     "hoonete_arv": (
+        "lubatud hoonete arv",
+        "lubatud majade arv",
+        "lubatud ehitada",
         "hoonete arv",
         "planeeritud hoonet",
         "hoonete suurim lubatud arv",
-    ),
-    "kasutusotstarve": (
-        "sihtotstarve",
-        "kasutusotstarve",
-        "maa kasutamise sihtotstarve",
     ),
     "katusekalle": (
         "katusekalle",
@@ -127,12 +118,6 @@ FIELD_WINDOW_KEYWORDS: dict[str, tuple[str, ...]] = {
         "tulepüsivusklass",
         "tulepüsivusaste",
         "tp-",
-    ),
-    "omandivorm": (
-        "omandivorm",
-        "eraomand",
-        "munitsipaalomand",
-        "riigiomand",
     ),
 }
 

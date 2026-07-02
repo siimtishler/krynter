@@ -81,7 +81,6 @@ FLOAT_FIELDS = {
     "ehitusalune_pind_m2",
 }
 INT_FIELDS = {
-    "lubatud_majade_ehitamise_arv",
     "hoonete_arv",
 }
 MIN_RESOLUTION_CONFIDENCE = 0.6
@@ -96,10 +95,6 @@ def should_resolve_field(
     if field.value is not None and field.value != "":
         return False
     if not field.candidates:
-        return False
-    if field.key == "kasutusotstarve" and _has_cadastre_land_use(parcel_context):
-        return False
-    if field.key == "omandivorm" and parcel_context.get("omvorm"):
         return False
     return True
 
@@ -315,10 +310,6 @@ def resolve_building_rights(
     _refresh_section_reviews(section)
     logger.info(f"LLM resolver complete resolved_fields={resolved}")
     return section
-
-
-def _has_cadastre_land_use(parcel_context: dict[str, Any]) -> bool:
-    return any(parcel_context.get(f"siht{index}") for index in range(1, 4))
 
 
 def _neighboring_fields(
