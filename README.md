@@ -6,7 +6,7 @@ Technically it has:
 - Backend: FastAPI service with GeoPandas/Shapely-based spatial lookup over local GeoPackage datasets.
 Detail-plan analyzer: downloads/caches detail-plan PDFs or ZIPs, OCRs with OCRmyPDF/Tesseract when needed, extracts text with PyMuPDF, selects relevant chunks, then uses regex/rule scoring to extract building-right fields like plot area, building coverage, allowed floors, height, roof slope, fire class, etc.
 - Optional LLM layer: current code includes an Ollama-backed resolver hook that can verify/resolve uncertain regex candidates after deterministic extraction.
-- Data/runtime: Docker/Poetry setup, local data/ mount for large GIS files and cached downloaded PDFs.
+- Data/runtime: Docker/Poetry setup, local `data/` source datasets, and ignored runtime caches under `data/detail_downloads/`.
 
 ## Backend Technical Overview
 
@@ -51,6 +51,39 @@ Add .env to frontend/ and `VITE_SHOW_DEBUG_HTML=true` to see extra debug info di
 
 Open up the frontend URL and youre good to go
 
+### Data layout
+
+Production datasets live in `data/` with stable, descriptive names:
+
+- `cadastre.gpkg` and `cadastre_vector_tiles/`
+- `detail_plans.gpkg`
+- `points_of_interest.gpkg`
+- `noise_areas.gpkg` and `noise_vector_tiles/`
+- `heritage_points.gpkg`
+- `land_restrictions.gpkg`
+- `default_poi_settings.json`
+
+Generated PDF downloads, OCR files, text caches, and local user POI settings are
+runtime state and stay ignored as `data/detail_downloads/` and
+`data/user_poi_settings.json`. Experimental or legacy datasets belong in the
+ignored `test_data/` directory.
+
+Cadastre vector tiles are generated from `data/cadastre.gpkg` and are also
+ignored because they contain tens of thousands of small `.pbf` files. Build them
+once locally with:
+
+```bash
+make vector-tiles
+```
+
+The command wraps `scripts/build_vector_tiles.sh`, which runs the fixed `ogr2ogr`
+command for the frontend layer name `tallinn_parcels`. The equivalent Docker
+path is:
+
+```bash
+make docker-vector-tiles
+```
+
 
 ### Local dependency installer
 
@@ -93,8 +126,20 @@ Services:
 * Backend API: http://127.0.0.1:8000
 * Ollama: http://127.0.0.1:11434
 
-The backend container mounts local `./data` to `/app/data`, so large GeoPackage
-and downloaded PDF files stay outside the image.
+The backend container mounts local `./data` to `/app/data`, so GeoPackage source
+data and downloaded PDF caches stay outside the image. The Docker build context
+excludes `data/` and `test_data/`; Compose provides data at runtime through the
+volume mount.
+
+If `data/cadastre_vector_tiles/` is missing, generate it before using the parcel
+map layer:
+
+```bash
+make docker-vector-tiles
+```
+
+The optional LLM resolver uses one model variable:
+`OLLAMA_BUILDING_RIGHT_MODEL` (default `gemma3:4b`).
 
 Run the standalone PDF analyzer inside Docker:
 

@@ -33,6 +33,16 @@ Important files:
 - `scripts/run_sample_detailplan_regex_analysis.py`: batch sample analysis to generate `data/detail_downloads/<id>/result.json`.
 - `scripts/run_detailplan_regex_analysis.py`: local single-PDF entrypoint.
 
+Production data files are expected in `data/` with descriptive names:
+`cadastre.gpkg`, `detail_plans.gpkg`, `points_of_interest.gpkg`,
+`noise_areas.gpkg`, `heritage_points.gpkg`, `land_restrictions.gpkg`,
+`noise_vector_tiles/`, and `default_poi_settings.json`. Cadastre vector tiles
+are generated from `data/cadastre.gpkg` with `scripts/build_vector_tiles.sh` into
+ignored `data/cadastre_vector_tiles/`; do not commit the `.pbf` tile tree.
+Runtime PDF/OCR caches live under `data/detail_downloads/`; local user settings
+are written to `data/user_poi_settings.json`. Legacy/sample datasets belong in
+ignored `test_data/`.
+
 ## Current Schema
 Each field is an `ExtractedField`:
 - `key`, `label`, `value`, `unit`, `confidence`, `source_type`, `evidence`
@@ -127,5 +137,5 @@ Preserve citations:
 - LLM failures must leave deterministic regex/cadastre/derived results intact.
 - LLM outputs require strict validation/coercion per field type/unit.
 - Tests should mock LLM providers and avoid network dependencies.
-- Generated `data/detail_downloads` outputs are ignored and should not be treated as source changes.
+- Generated `data/detail_downloads` outputs, `data/cadastre_vector_tiles`, and `data/user_poi_settings.json` are ignored and should not be treated as source changes.
 - Keep regex behavior stable: high-confidence, non-conflicting deterministic values should not be overwritten by LLM unless a deliberate verification policy says so.
