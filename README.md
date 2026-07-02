@@ -1,28 +1,12 @@
 ## Background
 
-Krünter is a infographics tool used for geographical analysis for the purpose
-of evaluating plots of land in Harjumaa Estonia from various perspectives. E.g
-* Home buyer
-* Real estate developer
-* Architect
-
-Each group has a specific criteria in based on which they evaluate the land
-Home buyers usually want to know what the surrounding environment has to offer
-* Stores 
-* Schools 
-* Public transport possibilities
-* Parks
-
-Real estate developers would need to know the cost effectiveness of certain plots.
-Krünter creates a detailplaneeringu analysis taking into account:
-* The geological sediment in the area/ground - Can affect building cost
-* Landscaping area
-* Heritage conservation areas (muinsuskaitsealad)
-
-Architects need to have a quick overview of requirements and surrounding personality of the plot:
-* Noise level
-* Winds
-* Traffic analysis  
+Krünter is a geospatial parcel-analysis web app for Harjumaa, Estonia. It lets a user search/select a land parcel by address or cadastre code, then shows useful context around it: nearby POIs, noise areas, heritage/restriction overlays, detail-plan overlaps, and parcel attributes on a MapLibre frontend.
+Technically it has:
+- Frontend: Vite/vanilla JS app with MapLibre map layers and API calls.
+- Backend: FastAPI service with GeoPandas/Shapely-based spatial lookup over local GeoPackage datasets.
+Detail-plan analyzer: downloads/caches detail-plan PDFs or ZIPs, OCRs with OCRmyPDF/Tesseract when needed, extracts text with PyMuPDF, selects relevant chunks, then uses regex/rule scoring to extract building-right fields like plot area, building coverage, allowed floors, height, roof slope, fire class, etc.
+- Optional LLM layer: current code includes an Ollama-backed resolver hook that can verify/resolve uncertain regex candidates after deterministic extraction.
+- Data/runtime: Docker/Poetry setup, local data/ mount for large GIS files and cached downloaded PDFs.
 
 
 ## Developing
