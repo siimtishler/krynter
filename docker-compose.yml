@@ -5,7 +5,6 @@ services:
       dockerfile: backend/Dockerfile
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:4b}
       OLLAMA_BUILDING_RIGHT_MODEL: ${OLLAMA_BUILDING_RIGHT_MODEL:-gemma3:4b}
       OLLAMA_TIMEOUT_S: ${OLLAMA_TIMEOUT_S:-600}
       DETAIL_PLAN_LLM_RESOLVER_ENABLED: ${DETAIL_PLAN_LLM_RESOLVER_ENABLED:-false}
@@ -38,7 +37,7 @@ services:
     image: ollama/ollama:latest
     entrypoint: ["/bin/sh", "-c"]
     command:
-      - "until OLLAMA_HOST=http://ollama:11434 ollama list >/dev/null 2>&1; do sleep 2; done; OLLAMA_HOST=http://ollama:11434 ollama pull ${OLLAMA_MODEL:-gemma3:4b}; OLLAMA_HOST=http://ollama:11434 ollama pull ${OLLAMA_BUILDING_RIGHT_MODEL:-gemma3:4b}"
+      - "until OLLAMA_HOST=http://ollama:11434 ollama list >/dev/null 2>&1; do sleep 2; done; OLLAMA_HOST=http://ollama:11434 ollama pull ${OLLAMA_BUILDING_RIGHT_MODEL:-gemma3:4b}"
     volumes:
       - ollama:/root/.ollama
     depends_on:

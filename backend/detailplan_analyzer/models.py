@@ -1,4 +1,4 @@
-"""Pydantic models for regex-only detail-planning PDF analysis."""
+"""Pydantic models for detail-planning PDF analysis."""
 
 from __future__ import annotations
 

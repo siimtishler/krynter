@@ -1,7 +1,7 @@
 # Detail-Plan PDF Analyzer Handoff
 
 ## Project Purpose
-This project analyzes Estonian detail-plan PDFs and extracts parcel/building-right fields for a selected parcel/detail plan. The current system is deterministic: it downloads/caches PDFs, OCRs when needed, extracts normalized page text, selects relevant evidence chunks, runs regex/cadastre/derived extraction, and returns a structured JSON response through `/api/detail-plan-analysis`. The next phase is to add an LLM-assisted resolver/verification layer for fields where regex has useful evidence but cannot safely choose a value.
+This project analyzes Estonian detail-plan PDFs and extracts parcel/building-right fields for a selected parcel/detail plan. The current system downloads/caches PDFs, OCRs when needed, extracts normalized page text, selects relevant evidence chunks, runs regex/cadastre/derived extraction, and returns a structured JSON response through `/api/detail-plan-analysis`. An optional LLM-assisted resolver can verify unresolved regex candidates when enabled.
 
 ## Current Pipeline Architecture
 Main orchestration lives in `backend/detailplan_analyzer/analyzer.py`.
@@ -20,12 +20,28 @@ Flow:
 Important files:
 - `backend/detailplan_analyzer/analyzer.py`: high-level orchestration.
 - `backend/detailplan_analyzer/extraction.py`: OCR/text extraction, page cache, chunk/window selection.
-- `backend/detailplan_analyzer/rules.py`: field specs, regex patterns, candidate ranking, cadastre and derived enrichment.
+- `backend/detailplan_analyzer/rules.py`: compatibility facade for older imports.
+- `backend/detailplan_analyzer/rule_specs.py`: field specs, regex patterns, and parsers.
+- `backend/detailplan_analyzer/rule_engine.py`: candidate generation and field selection orchestration.
+- `backend/detailplan_analyzer/candidate_scoring.py`: candidate scoring, ranking, and direct-fill gating.
+- `backend/detailplan_analyzer/address_scoped.py`: selected-address table/window extraction.
+- `backend/detailplan_analyzer/enrichment.py`: cadastre and derived enrichment.
+- `backend/detailplan_analyzer/addressing.py`: selected-address parsing and matching helpers.
 - `backend/detailplan_analyzer/models.py`: Pydantic response/candidate/evidence schema.
 - `backend/detailplan_analyzer/pdfs.py`: download/OCR/cache helpers.
 - `backend/tests/test_detailplan_analyzer.py`: current regression coverage.
 - `scripts/run_sample_detailplan_regex_analysis.py`: batch sample analysis to generate `data/detail_downloads/<id>/result.json`.
 - `scripts/run_detailplan_regex_analysis.py`: local single-PDF entrypoint.
+
+Production data files are expected in `data/` with descriptive names:
+`cadastre.gpkg`, `detail_plans.gpkg`, `points_of_interest.gpkg`,
+`noise_areas.gpkg`, `heritage_points.gpkg`, `land_restrictions.gpkg`,
+`noise_vector_tiles/`, and `default_poi_settings.json`. Cadastre vector tiles
+are generated from `data/cadastre.gpkg` with `scripts/build_vector_tiles.sh` into
+ignored `data/cadastre_vector_tiles/`; do not commit the `.pbf` tile tree.
+Runtime PDF/OCR caches live under `data/detail_downloads/`; local user settings
+are written to `data/user_poi_settings.json`. Legacy/sample datasets belong in
+ignored `test_data/`.
 
 ## Current Schema
 Each field is an `ExtractedField`:
@@ -42,26 +58,23 @@ Each candidate has:
 `context` is the surrounding local window, not the whole page. `evidence.text` should remain the directly cited matched text. Do not lose `pdf`/`page`.
 
 ## Regex Candidate Generation And Ranking
-Field specs are in `FIELD_SPECS` in `rules.py`. Current fields include:
+Field specs are in `FIELD_SPECS` in `rule_specs.py` and are re-exported from `rules.py`. Current fields include:
 - `krundi_pind_m2`
 - `taisehitus_pct`
 - `brutopind_m2`
 - `ehitusalune_pind_m2`
 - `lubatud_korrused`
-- `lubatud_majade_ehitamise_arv`
 - `hoonete_lubatud_korgused_m`
 - `hoonete_arv`
-- `kasutusotstarve`
 - `katusekalle`
 - `tulepusivusklass`
-- `omandivorm`
 
 Regex runs over page chunks and field-specific windows. If a `TextChunk.field_key` is set, it only applies to that field. Candidates are scored using pattern confidence plus context boosts/penalties. Strong contexts include terms like `ehitusõigus`, `hoonestustingimused`, `krundi ehitusõigus`, `põhinäitajad`, `lubatud`, `suurim`, `maksimaalne`. Weak contexts include `olemasolev`, `kontaktvöönd`, `naaber`, `piirdeaed`, `servituut`, `sisukord`, `visioon`, plus field-specific penalties.
 
 Acceptance policy:
 - Strong single/non-conflicting top candidates fill `field.value`.
 - Weak or conflicting candidates leave `field.value = null`, preserve ranked candidates, and add `needs_review`.
-- This is intentional: uncertain regex should not guess. The future LLM should resolve these review fields.
+- This is intentional: uncertain regex should not guess. The optional LLM resolver can resolve these review fields when enabled.
 
 Special handling:
 - Floors require a digit or Estonian number word; obvious descriptive false positives are rejected.
@@ -74,9 +87,8 @@ Parcel context is compacted by `compact_parcel_context()` from keys:
 `tunnus`, `pindala`, `siht1..3`, `so_prts1..3`, `omvorm`.
 
 Current behavior:
-- `krundi_pind_m2`: cadastre area is added as a candidate and used if PDF value is missing; mismatch creates review.
-- `kasutusotstarve`: if parcel context has `siht*`/`so_prts*`, use cadastre directly and skip PDF regex.
-- `omandivorm`: if parcel context has `omvorm`, use cadastre directly and skip PDF regex.
+- `krundi_pind_m2`: cadastre area is always added as a candidate. It overrides PDF area when the mismatch is significant and adds a review note.
+- Land-use and ownership are not analyzer fields; they remain available from parcel attributes under `Aadress`.
 - Derived candidates have `source_type="derived"` and should be treated as deterministic but lower confidence.
 
 ## Problematic Regex-Only Fields
@@ -86,15 +98,14 @@ Most likely to need LLM resolution:
 - `taisehitus_pct`, `ehitusalune_pind_m2`, `brutopind_m2`: multiple plots/buildings in one plan, tables, neighboring parcels.
 - `katusekalle`: OCR/table formatting such as compact ranges.
 - `tulepusivusklass`: multiple codes or generic fire-safety references.
-- `kasutusotstarve`/`omandivorm` only need LLM when parcel context is missing.
 
-## LLM Resolver Design Direction
-Add the LLM as a resolver/verification layer after deterministic extraction, not as a replacement.
+## LLM Resolver Design
+The LLM resolver runs as a resolver/verification layer after deterministic extraction, not as a replacement.
 
 When to call:
 - Only for fields with `value is null` and either `needs_review` or candidates exist.
 - Optionally for high-risk accepted fields if a verification mode is enabled, but default should preserve strong deterministic regex behavior.
-- Do not call for parcel-backed `kasutusotstarve`/`omandivorm` when cadastre context exists.
+- Do not call for land-use or ownership; they are parcel attributes, not analyzer fields.
 - Do not call for setup errors/no extracted text.
 
 LLM input should be compact and field-scoped:
@@ -111,7 +122,7 @@ LLM output should be structured:
 - `unit`
 - `confidence`
 - `decision`: e.g. `accepted_candidate`, `corrected_candidate`, `no_answer`, `conflict`
-- `source_type`: probably new value like `llm` or `llm_verified` may require model enum change
+- `source_type`: `llm`
 - `evidence`: exact `pdf`, `page`, and short quoted/normalized text from supplied evidence
 - `candidate_rank` if selecting an existing candidate
 - `reason`
@@ -122,11 +133,9 @@ Preserve citations:
 - If it corrects a candidate, it still needs a source span from `context` or `evidence.text`.
 - Avoid outputs with no page/pdf unless explicitly derived or unavailable.
 
-## Constraints And Open Questions
-- Current models intentionally do not include `llm_status`, `analysis_id`, or LLM fields. Adding LLM requires schema design.
-- Decide whether LLM results mutate `ExtractedField.value` directly or are stored as separate resolver metadata.
-- Need a deterministic fallback if LLM fails or returns invalid JSON.
-- Need strict validation/coercion per field type/unit.
-- Need tests with mocked LLM, no network dependency.
-- Generated `data/detail_downloads` outputs are ignored and should not be treated as source changes.
+## Constraints
+- LLM failures must leave deterministic regex/cadastre/derived results intact.
+- LLM outputs require strict validation/coercion per field type/unit.
+- Tests should mock LLM providers and avoid network dependencies.
+- Generated `data/detail_downloads` outputs, `data/cadastre_vector_tiles`, and `data/user_poi_settings.json` are ignored and should not be treated as source changes.
 - Keep regex behavior stable: high-confidence, non-conflicting deterministic values should not be overwritten by LLM unless a deliberate verification policy says so.

@@ -48,15 +48,12 @@ const DETAIL_FIELD_ORDER = [
     'taisehitus_pct',
     'ehitusalune_pind_m2',
     'brutopind_m2',
-    'korruselisus',
+    'lubatud_korrused',
+    'hoonete_arv',
     'hoonete_lubatud_korgused_m',
 ]
 
-const HIDDEN_BUILDING_FIELD_KEYS = new Set([
-    'hoonete_arv',
-    'kasutusotstarve',
-    'omandivorm',
-])
+const HIDDEN_BUILDING_FIELD_KEYS = new Set()
 
 let currentPoiCollection = emptyFeatureCollection()
 let currentPoiFeaturesByKey = new Map()

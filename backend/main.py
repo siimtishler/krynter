@@ -4,18 +4,10 @@ from fastapi.responses import FileResponse
 
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.core.config import DATA_DIR, config
+from backend.core.config import config
 from backend.api.api import router
 
 app = FastAPI()
-
-
-@app.get("/vector_tiles/metadata.json")
-def get_vector_tile_metadata():
-    metadata_path = DATA_DIR / "kerese" / "metadata.json"
-    if not metadata_path.exists():
-        raise HTTPException(status_code=404, detail="Vector tile metadata not found")
-    return FileResponse(metadata_path, media_type="application/json")
 
 
 @app.get("/tallinn_parcels/{z}/{x}/{y}.pbf")

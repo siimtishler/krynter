@@ -9,3 +9,9 @@ test:
 
 integration test-integration:
 	KRUNTER_RUN_INTEGRATION=1 poetry run pytest -m integration backend/tests/test_detailplan_golden.py
+
+vector-tiles:
+	scripts/build_vector_tiles.sh
+
+docker-vector-tiles:
+	DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose run --rm --build --no-deps backend scripts/build_vector_tiles.sh

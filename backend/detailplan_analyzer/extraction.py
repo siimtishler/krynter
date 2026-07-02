@@ -16,13 +16,20 @@ from backend.core.utils import time_function
 from backend.detailplan_analyzer.models import Evidence
 from backend.detailplan_analyzer.pdfs import OCRRuntime, run_ocr
 
+PDF_TEXT_SAMPLE_CHARS = 100
+PDF_TEXT_SAMPLE_PAGES = 5
+MAX_RELEVANT_CHUNKS = 12
+CHUNK_TEXT_CHARS = 8000
+MAX_FIELD_WINDOWS_PER_FIELD = 4
+FIELD_WINDOW_CONTEXT_LINES = 3
+FIELD_WINDOW_CHARS = 1200
+FIELD_WINDOW_DEDUP_CHARS = 700
+
 TOPIC_KEYWORDS = {
     "krunt": 2,
     "krundi suurus": 6,
     "krundi pind": 6,
     "pindala": 4,
-    "sihtotstarve": 5,
-    "kasutusotstarve": 5,
     "korrus": 4,
     "täisehitus": 7,
     "ehitisealune": 6,
@@ -93,11 +100,6 @@ FIELD_WINDOW_KEYWORDS: dict[str, tuple[str, ...]] = {
         "korruseline",
         "korrust",
     ),
-    "lubatud_majade_ehitamise_arv": (
-        "lubatud hoonete arv",
-        "lubatud majade arv",
-        "lubatud ehitada",
-    ),
     "hoonete_lubatud_korgused_m": (
         "hoonestuse kõrgus",
         "hoone kõrgus",
@@ -106,14 +108,12 @@ FIELD_WINDOW_KEYWORDS: dict[str, tuple[str, ...]] = {
         "lubatud kõrgus",
     ),
     "hoonete_arv": (
+        "lubatud hoonete arv",
+        "lubatud majade arv",
+        "lubatud ehitada",
         "hoonete arv",
         "planeeritud hoonet",
         "hoonete suurim lubatud arv",
-    ),
-    "kasutusotstarve": (
-        "sihtotstarve",
-        "kasutusotstarve",
-        "maa kasutamise sihtotstarve",
     ),
     "katusekalle": (
         "katusekalle",
@@ -127,12 +127,6 @@ FIELD_WINDOW_KEYWORDS: dict[str, tuple[str, ...]] = {
         "tulepüsivusklass",
         "tulepüsivusaste",
         "tp-",
-    ),
-    "omandivorm": (
-        "omandivorm",
-        "eraomand",
-        "munitsipaalomand",
-        "riigiomand",
     ),
 }
 
@@ -186,11 +180,11 @@ def _deserialize_page(payload: dict) -> PageText:
 
 
 @time_function
-def pdf_has_text(pdf_path: Path, min_chars: int = 100) -> bool:
+def pdf_has_text(pdf_path: Path, min_chars: int = PDF_TEXT_SAMPLE_CHARS) -> bool:
     try:
         with fitz.open(pdf_path) as document:
             text_len = 0
-            for page_index in range(min(5, document.page_count)):
+            for page_index in range(min(PDF_TEXT_SAMPLE_PAGES, document.page_count)):
                 text_len += len(document.load_page(page_index).get_text("text").strip())
                 if text_len >= min_chars:
                     logger.debug(
@@ -324,8 +318,9 @@ def _page_score(page: PageText, variants: list[str]) -> tuple[int, list[str]]:
 def select_relevant_chunks(
     pages: list[PageText],
     address: str,
-    max_chunks: int = 12,
+    max_chunks: int = MAX_RELEVANT_CHUNKS,
 ) -> list[TextChunk]:
+    """Pick broad pages that are likely to contain building-right data."""
     variants = address_variants(address)
     logger.debug(
         f"Selecting chunks address={address} variants={variants} "
@@ -357,7 +352,7 @@ def select_relevant_chunks(
         TextChunk(
             pdf_path=page.pdf_path,
             page=page.page,
-            text=page.normalized_text[:8000],
+            text=page.normalized_text[:CHUNK_TEXT_CHARS],
             score=score,
             reasons=reasons,
         )
@@ -404,10 +399,11 @@ def _field_window_score(text: str, keyword: str) -> int:
 @time_function
 def select_field_evidence_chunks(
     pages: list[PageText],
-    max_windows_per_field: int = 4,
-    context_lines: int = 3,
-    max_chars: int = 1200,
+    max_windows_per_field: int = MAX_FIELD_WINDOWS_PER_FIELD,
+    context_lines: int = FIELD_WINDOW_CONTEXT_LINES,
+    max_chars: int = FIELD_WINDOW_CHARS,
 ) -> list[TextChunk]:
+    """Pick narrow keyword windows so field regexes can see table-like evidence."""
     chunks: list[TextChunk] = []
     for field_key, keywords in FIELD_WINDOW_KEYWORDS.items():
         field_chunks: list[TextChunk] = []
@@ -428,7 +424,9 @@ def select_field_evidence_chunks(
                 start = max(0, index - context_lines)
                 end = min(len(lines), index + context_lines + 1)
                 text = "\n".join(lines[start:end]).strip()[:max_chars]
-                normalized_key = re.sub(r"\s+", " ", text.lower())[:700]
+                normalized_key = re.sub(r"\s+", " ", text.lower())[
+                    :FIELD_WINDOW_DEDUP_CHARS
+                ]
                 key = (page.pdf_path.name, page.page, normalized_key)
                 if not text or key in seen:
                     continue

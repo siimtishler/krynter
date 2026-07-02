@@ -12,6 +12,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from backend.core.logging import logger
+from backend.detailplan_analyzer.field_state import refresh_section_reviews
 from backend.detailplan_analyzer.models import (
     BuildingRightSection,
     Evidence,
@@ -20,6 +21,7 @@ from backend.detailplan_analyzer.models import (
     ReviewItem,
     SourceType,
 )
+from backend.detailplan_analyzer.value_parsing import parse_float
 
 
 class LLMResolverDecision(StrEnum):
@@ -81,7 +83,6 @@ FLOAT_FIELDS = {
     "ehitusalune_pind_m2",
 }
 INT_FIELDS = {
-    "lubatud_majade_ehitamise_arv",
     "hoonete_arv",
 }
 MIN_RESOLUTION_CONFIDENCE = 0.6
@@ -96,10 +97,6 @@ def should_resolve_field(
     if field.value is not None and field.value != "":
         return False
     if not field.candidates:
-        return False
-    if field.key == "kasutusotstarve" and _has_cadastre_land_use(parcel_context):
-        return False
-    if field.key == "omandivorm" and parcel_context.get("omvorm"):
         return False
     return True
 
@@ -225,6 +222,7 @@ def apply_resolution(
     resolution: LLMFieldResolution,
     min_confidence: float = MIN_RESOLUTION_CONFIDENCE,
 ) -> bool:
+    """Apply a validated LLM decision without inventing unsupported evidence."""
     if resolution.field_key != field.key:
         return False
     if resolution.source_type != SourceType.LLM:
@@ -312,13 +310,9 @@ def resolve_building_rights(
             continue
         if applied:
             resolved += 1
-    _refresh_section_reviews(section)
+    refresh_section_reviews(section)
     logger.info(f"LLM resolver complete resolved_fields={resolved}")
     return section
-
-
-def _has_cadastre_land_use(parcel_context: dict[str, Any]) -> bool:
-    return any(parcel_context.get(f"siht{index}") for index in range(1, 4))
 
 
 def _neighboring_fields(
@@ -455,18 +449,11 @@ def _coerce_value(field_key: str, value: Any) -> Any:
     if value is None or value == "":
         raise ValueError("Resolved value is empty")
     if field_key in FLOAT_FIELDS:
-        parsed = _parse_float(str(value))
+        parsed = parse_float(str(value))
         return int(parsed) if parsed.is_integer() else parsed
     if field_key in INT_FIELDS:
-        return int(round(_parse_float(str(value))))
+        return int(round(parse_float(str(value))))
     return re.sub(r"\s+", " ", str(value).strip())
-
-
-def _parse_float(value: str) -> float:
-    cleaned = value.replace("\xa0", " ")
-    cleaned = re.sub(r"\s+", "", cleaned)
-    cleaned = cleaned.replace(",", ".")
-    return float(cleaned)
 
 
 def _supported_evidence(
@@ -545,9 +532,3 @@ def _append_llm_candidate(field: ExtractedField, candidate: RegexCandidate) -> N
     )
     if not exists:
         field.candidates.append(candidate)
-
-
-def _refresh_section_reviews(section: BuildingRightSection) -> None:
-    section.needs_review = [
-        review for field in section.fields.values() for review in field.needs_review
-    ]
