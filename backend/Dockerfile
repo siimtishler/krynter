@@ -9,6 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
+        gdal-bin \
         ghostscript \
         libgomp1 \
         qpdf \
@@ -24,7 +25,7 @@ RUN pip install --no-cache-dir "poetry==$POETRY_VERSION" \
     && poetry install --only main --no-root
 
 COPY backend ./backend
-COPY experiments/run_detailplan_pdf_analysis.py ./experiments/run_detailplan_pdf_analysis.py
+COPY scripts ./scripts
 
 EXPOSE 8000
 

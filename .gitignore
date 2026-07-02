@@ -6,8 +6,10 @@
 .env
 __pycache__
 frontend/node_modules
-data/*
-!data/poi-settings-default.json
+data/detail_downloads/
+data/user_poi_settings.json
+data/cadastre_vector_tiles/
 data_backup/*
+test_data/
 frontend/dist
 experiments/

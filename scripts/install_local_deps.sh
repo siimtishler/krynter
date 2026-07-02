@@ -2,7 +2,7 @@
 set -euo pipefail
 
 INSTALL_OLLAMA=false
-OLLAMA_MODEL="${OLLAMA_MODEL:-gemma3:4b}"
+OLLAMA_BUILDING_RIGHT_MODEL="${OLLAMA_BUILDING_RIGHT_MODEL:-gemma3:4b}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -10,7 +10,7 @@ for arg in "$@"; do
       INSTALL_OLLAMA=true
       ;;
     --model=*)
-      OLLAMA_MODEL="${arg#--model=}"
+      OLLAMA_BUILDING_RIGHT_MODEL="${arg#--model=}"
       ;;
     -h|--help)
       cat <<'USAGE'
@@ -22,7 +22,8 @@ Usage:
   scripts/install_local_deps.sh --with-ollama --model=qwen3:8b
 
 Environment:
-  OLLAMA_MODEL=gemma3:4b  Default model pulled when --with-ollama is used.
+  OLLAMA_BUILDING_RIGHT_MODEL=gemma3:4b
+    Default resolver model pulled when --with-ollama is used.
 USAGE
       exit 0
       ;;
@@ -48,6 +49,7 @@ echo "Installing OCR system dependencies..."
 $SUDO apt-get update
 $SUDO apt-get install -y \
   curl \
+  gdal-bin \
   ghostscript \
   qpdf \
   tesseract-ocr \
@@ -69,8 +71,8 @@ if [ "$INSTALL_OLLAMA" = true ]; then
     sleep 3
   fi
 
-  echo "Pulling Ollama model: $OLLAMA_MODEL"
-  ollama pull "$OLLAMA_MODEL"
+  echo "Pulling Ollama model: $OLLAMA_BUILDING_RIGHT_MODEL"
+  ollama pull "$OLLAMA_BUILDING_RIGHT_MODEL"
 else
   cat <<'NOTE'
 
