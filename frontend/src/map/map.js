@@ -6,6 +6,10 @@ import { API_BASE_URL } from '../api/client.js'
 
 const SHOW_DEBUG_HTML = import.meta.env.VITE_SHOW_DEBUG_HTML === 'true'
 const KERESE_CENTER = [24.709819, 59.3795179]
+const NOISE_AREA_SOURCE_ID = 'noise-area'
+const NOISE_AREA_SOURCE_FILL_ID = 'noise-area-fill'
+const NOISE_AREA_SOURCE_LINE_ID = 'noise-area-line'
+const NOISE_LEGEND_CONTROL_CLASS = 'noise-legend-control'
 const DETAIL_PLAN_SOURCE_ID = 'detail-plans'
 const DETAIL_PLAN_FILL_LAYER_ID = 'detail-plan-fill'
 const DETAIL_PLAN_LINE_LAYER_ID = 'detail-plan-line'
@@ -18,6 +22,30 @@ const NOISE_SOURCE_ID = 'noise-areas'
 const NOISE_FILL_LAYER_ID = 'noise-areas-fill'
 const NOISE_LINE_LAYER_ID = 'noise-areas-line'
 const PARCEL_SELECTED_LAYER_ID = 'parcel-fill-selected'
+
+const NOISE_AREA_COLOR = [
+    'step',
+    ['to-number', ['coalesce', ['get', 'MYRAKLASS'], ['get', 'db'], ['get', 'noise_db'], 45]],
+    '#22c55e',
+    50,
+    '#84cc16',
+    55,
+    '#facc15',
+    60,
+    '#f97316',
+    65,
+    '#ef4444',
+    70,
+    '#7e22ce',
+]
+const NOISE_LEGEND_STEPS = [
+    ['45-49 dB', '#22c55e'],
+    ['50-54 dB', '#84cc16'],
+    ['55-59 dB', '#facc15'],
+    ['60-64 dB', '#f97316'],
+    ['65-69 dB', '#ef4444'],
+    ['70+ dB', '#7e22ce'],
+]
 
 let hoverPoiPopup = null
 let pinnedPoiPopup = null
@@ -61,6 +89,18 @@ function setLayerVisibility(map, layerIds, visible) {
     }
 }
 
+function movePoiLayersToTop(map) {
+    for (const layerId of [POI_CIRCLE_LAYER_ID, POI_LABEL_LAYER_ID, POI_SELECTED_LAYER_ID]) {
+        if (map.getLayer(layerId)) {
+            map.moveLayer(layerId)
+        }
+    }
+}
+
+function setNoiseLegendVisible(visible) {
+    document.querySelector(`.${NOISE_LEGEND_CONTROL_CLASS}`)?.classList.toggle('is-hidden', !visible)
+}
+
 function runWhenMapReady(map, callback) {
     if (map.loaded()) {
         callback()
@@ -77,8 +117,49 @@ function emptyFeatureCollection() {
     }
 }
 
+function ensureNoiseAreaLayers(map) {
+    if (map.getSource(NOISE_AREA_SOURCE_ID)) {
+        movePoiLayersToTop(map)
+        return
+    }
+
+    map.addSource(NOISE_AREA_SOURCE_ID, {
+        type: 'geojson',
+        data: `${API_BASE_URL}/api/noise-area/geojson`
+    })
+
+    map.addLayer({
+        id: NOISE_AREA_SOURCE_FILL_ID,
+        type: 'fill',
+        source: NOISE_AREA_SOURCE_ID,
+        layout: {
+            visibility: 'none',
+        },
+        paint: {
+            'fill-color': NOISE_AREA_COLOR,
+            'fill-opacity': 0.22,
+        }
+    })
+
+    map.addLayer({
+        id: NOISE_AREA_SOURCE_LINE_ID,
+        type: 'line',
+        source: NOISE_AREA_SOURCE_ID,
+        layout: {
+            visibility: 'none',
+        },
+        paint: {
+            'line-color': NOISE_AREA_COLOR,
+            'line-width': 1,
+            'line-opacity': 0.72,
+        },
+    })
+    movePoiLayersToTop(map)
+}
+
 function ensureDetailPlanLayers(map) {
     if (map.getSource(DETAIL_PLAN_SOURCE_ID)) {
+        movePoiLayersToTop(map)
         return
     }
 
@@ -92,7 +173,7 @@ function ensureDetailPlanLayers(map) {
         type: 'fill',
         source: DETAIL_PLAN_SOURCE_ID,
         layout: {
-            visibility: 'visible',
+            visibility: 'none',
         },
         paint: {
             'fill-color': [
@@ -111,7 +192,7 @@ function ensureDetailPlanLayers(map) {
         type: 'line',
         source: DETAIL_PLAN_SOURCE_ID,
         layout: {
-            visibility: 'visible',
+            visibility: 'none',
         },
         paint: {
             'line-color': [
@@ -132,6 +213,7 @@ function ensureDetailPlanLayers(map) {
             ],
         },
     })
+    movePoiLayersToTop(map)
 
 }
 
@@ -170,6 +252,48 @@ function createDetailPlanToggleControl(map) {
                     ],
                     checkbox.checked,
                 )
+                movePoiLayersToTop(map)
+            })
+
+            return container
+        },
+        onRemove() { },
+    }
+}
+
+function createNoiseAreaToggleControl(map) {
+    return {
+        onAdd() {
+            const container = document.createElement('div')
+            container.className = 'map-layer-control maplibregl-ctrl'
+
+            const label = document.createElement('label')
+            label.className = 'map-layer-control__label'
+            container.appendChild(label)
+
+            const checkbox = document.createElement('input')
+            checkbox.type = 'checkbox'
+            label.appendChild(checkbox)
+
+            const text = document.createElement('span')
+            text.textContent = 'Müraala'
+            label.appendChild(text)
+
+            checkbox.addEventListener('change', () => {
+                if (checkbox.checked) {
+                    ensureNoiseAreaLayers(map)
+                }
+
+                setLayerVisibility(
+                    map,
+                    [
+                        NOISE_AREA_SOURCE_FILL_ID,
+                        NOISE_AREA_SOURCE_LINE_ID,
+                    ],
+                    checkbox.checked,
+                )
+                setNoiseLegendVisible(checkbox.checked)
+                movePoiLayersToTop(map)
             })
 
             return container
@@ -264,6 +388,7 @@ function ensurePoiLayers(map) {
             },
         })
     }
+    movePoiLayersToTop(map)
 }
 
 function ensureNoiseLayers(map) {
@@ -281,19 +406,7 @@ function ensureNoiseLayers(map) {
                 type: 'fill',
                 source: NOISE_SOURCE_ID,
                 paint: {
-                    'fill-color': [
-                        'interpolate',
-                        ['linear'],
-                        ['coalesce', ['get', 'MYRAKLASS'], ['get', 'db'], ['get', 'noise_db'], 40],
-                        40,
-                        '#22c55e',
-                        55,
-                        '#facc15',
-                        65,
-                        '#ef4444',
-                        75,
-                        '#7e22ce',
-                    ],
+                    'fill-color': NOISE_AREA_COLOR,
                     'fill-opacity': 0.28,
                 },
             },
@@ -308,25 +421,44 @@ function ensureNoiseLayers(map) {
                 type: 'line',
                 source: NOISE_SOURCE_ID,
                 paint: {
-                    'line-color': [
-                        'interpolate',
-                        ['linear'],
-                        ['coalesce', ['get', 'MYRAKLASS'], ['get', 'db'], ['get', 'noise_db'], 40],
-                        40,
-                        '#16a34a',
-                        55,
-                        '#ca8a04',
-                        65,
-                        '#dc2626',
-                        75,
-                        '#6b21a8',
-                    ],
+                    'line-color': NOISE_AREA_COLOR,
                     'line-width': 1.2,
                     'line-opacity': 0.82,
                 },
             },
             'parcel-line',
         )
+    }
+}
+
+function createNoiseLegendControl() {
+    return {
+        onAdd() {
+            const container = document.createElement('div')
+            container.className = `${NOISE_LEGEND_CONTROL_CLASS} maplibregl-ctrl is-hidden`
+
+            const title = document.createElement('strong')
+            title.textContent = 'Müra'
+            container.appendChild(title)
+
+            for (const [label, color] of NOISE_LEGEND_STEPS) {
+                const row = document.createElement('span')
+                row.className = 'noise-legend-row'
+
+                const swatch = document.createElement('i')
+                swatch.style.backgroundColor = color
+                row.appendChild(swatch)
+
+                const text = document.createElement('span')
+                text.textContent = label
+                row.appendChild(text)
+
+                container.appendChild(row)
+            }
+
+            return container
+        },
+        onRemove() { },
     }
 }
 
@@ -653,7 +785,12 @@ export function createMap(id, options = {}) {
         ensurePoiLayers(map)
         addPoiEvents(map)
         ensureNoiseLayers(map)
-        map.addControl(createDetailPlanToggleControl(map), 'bottom-left')
+        ensureDetailPlanLayers(map)
+        ensureNoiseAreaLayers(map)
+        movePoiLayersToTop(map)
+        map.addControl(createDetailPlanToggleControl(map), 'top-left')
+        map.addControl(createNoiseAreaToggleControl(map), 'top-left')
+        map.addControl(createNoiseLegendControl(), 'bottom-left')
     })
 
     return map
@@ -704,6 +841,7 @@ export function setPoiOverlay(map, featureCollection) {
         if (source) {
             source.setData(featureCollection)
         }
+        movePoiLayersToTop(map)
     })
 }
 
@@ -736,6 +874,7 @@ export function focusPoiOnMap(map, feature) {
                 features: [selectedFeature],
             })
         }
+        movePoiLayersToTop(map)
 
         const coordinates = selectedFeature.geometry.coordinates
         if (Array.isArray(coordinates)) {
@@ -756,6 +895,7 @@ export function setNoiseOverlay(map, featureCollection) {
         if (source) {
             source.setData(featureCollection)
         }
+        movePoiLayersToTop(map)
     })
 }
 

@@ -1,6 +1,7 @@
 """Shared constants and response field definitions for geo services."""
 
 DEFAULT_POI_LIMIT = 3
+MAX_POI_QUERY_LIMIT = 5
 DEFAULT_NOISE_BUFFER_M = 20
 DETAIL_PLAN_MIN_COVERAGE_PCT = 10.0
 NO_DATA_DB_UPPER_BOUND = 40.0
@@ -12,84 +13,98 @@ POI_CATEGORIES = {
     "sport_ja_liikumine": {
         "label": "Sport ja liikumine",
         "queries": [
-            {"label": "Sport", "limit": 3, "filters": {"grupp": {"sport"}}},
-            {
-                "label": "Terviserajad",
-                "limit": 2,
-                "filters": {"grupp": {"terviserada"}},
-            },
-            {"label": "Supluskohad", "limit": 2, "filters": {"grupp": {"supluskoht"}}},
+            {"label": "Sport", "filters": {"grupp": {"sport"}}},
+            {"label": "Terviserada", "filters": {"grupp": {"terviserada"}}},
+            {"label": "Supluskoht", "filters": {"grupp": {"supluskoht"}}},
         ],
     },
     "poed_ja_ostud": {
         "label": "Poed ja ostud",
-        "filters": {"alamgrupp": {"kaubanduskeskus"}},
+        "queries": [
+            {"label": "Kaubanduskeskus", "filters": {"alamgrupp": {"kaubanduskeskus"}}}
+        ],
     },
     "haridus_ja_lapsed": {
         "label": "Haridus ja lapsed",
         "queries": [
             {
-                "label": "Põhikoolid ja gümnaasiumid",
-                "limit": 2,
+                "label": "Põhikool ja gümnaasium",
                 "filters": {"alamgrupp": {"põhikool või gümnaasium"}},
             },
             {
                 "label": "Lastehoid",
-                "limit": 1,
                 "filters": {"alamgrupp": {"koolieelne lasteasutus", "lasteaed"}},
             },
-            {"label": "Huvikoolid", "limit": 2, "filters": {"alamgrupp": {"huvikool"}}},
-            {
-                "label": "Lapsehoid",
-                "limit": 1,
-                "filters": {"alamgrupp": {"lapsehoiuteenus"}},
-            },
+            {"label": "Huvikool", "filters": {"alamgrupp": {"huvikool"}}},
+            {"label": "Lapsehoid", "filters": {"alamgrupp": {"lapsehoiuteenus"}}},
         ],
     },
     "tervis": {
         "label": "Tervis",
         "queries": [
-            {"label": "Perearst", "limit": 1, "filters": {"grupp": {"perearst"}}},
-            {"label": "Haiglad", "limit": 1, "filters": {"grupp": {"haigla"}}},
-            {"label": "Apteegid", "limit": 1, "filters": {"grupp": {"tervisekaubad"}}},
+            {"label": "Perearst", "filters": {"grupp": {"perearst"}}},
+            {"label": "Haigla", "filters": {"grupp": {"haigla"}}},
+            {"label": "Apteek", "filters": {"grupp": {"tervisekaubad"}}},
         ],
     },
     "transport": {
         "label": "Transport",
         "queries": [
-            {"label": "Peatused", "limit": 3, "filters": {"grupp": {"peatus"}}},
-            {"label": "Parklad", "limit": 1, "filters": {"grupp": {"parkla"}}},
+            {"label": "Bussipeatus", "filters": {"alamgrupp": {"bussipeatus"}}},
+            {"label": "Rongipeatus", "filters": {"alamgrupp": {"rongipeatus"}}},
+            {"label": "Trammipeatus", "filters": {"alamgrupp": {"trammipeatus"}}},
+            {"label": "Parkla", "filters": {"alamgrupp": {"parkla", "avalik parkla"}}},
         ],
     },
     "igapaevateenused": {
         "label": "Igapäevateenused",
         "queries": [
-            {"label": "Post", "limit": 1, "filters": {"grupp": {"post"}}},
-            {"label": "Pank ja ATM", "limit": 1, "filters": {"grupp": {"pank"}}},
-            {"label": "Tankla", "limit": 1, "filters": {"grupp": {"tankla"}}},
-            {
-                "label": "Laadimispunkt",
-                "limit": 1,
-                "filters": {"grupp": {"laadimispunkt"}},
-            },
+            {"label": "Post", "filters": {"grupp": {"post"}}},
+            {"label": "Pank ja ATM", "filters": {"grupp": {"pank"}}},
+            {"label": "Tankla", "filters": {"grupp": {"tankla"}}},
+            {"label": "Laadimispunkt", "filters": {"grupp": {"laadimispunkt"}}},
         ],
     },
     "sook_ja_kohvikud": {
         "label": "Söök ja kohvikud",
+        "queries": [
+            {"label": "Turg", "filters": {"alamgrupp": {"taluturg ja väiketootja"}}},
+            {"label": "Restoran", "filters": {"alamgrupp": {"restoran"}}},
+            {"label": "Kohvik", "filters": {"alamgrupp": {"kohvik"}}},
+            {"label": "Tänavatoit", "filters": {"alamgrupp": {"tänavatoit"}}},
+            {"label": "Baar/pubi", "filters": {"alamgrupp": {"baar ja pubi"}}},
+            {
+                "label": "Elamustoitlustus",
+                "filters": {"alamgrupp": {"elamustoitlustus"}},
+            },
+        ],
         "filters": {"grupp": {"toitlustus"}},
     },
     "kultuur_ja_vaba_aeg": {
         "label": "Kultuur ja vaba aeg",
         "queries": [
-            {"label": "Kinod", "limit": 1, "filters": {"alamgrupp": {"kino"}}},
-            {"label": "Teatrid", "limit": 1, "filters": {"alamgrupp": {"teater"}}},
-            {"label": "Muuseumid", "limit": 1, "filters": {"alamgrupp": {"muuseum"}}},
-            {"label": "Kirikud", "limit": 1, "filters": {"alamgrupp": {"religioon"}}},
+            {"label": "Kino", "filters": {"alamgrupp": {"kino"}}},
+            {"label": "Teater", "filters": {"alamgrupp": {"teater"}}},
+            {"label": "Muuseum", "filters": {"alamgrupp": {"muuseum"}}},
+            {"label": "Kirik", "filters": {"alamgrupp": {"religioon"}}},
+            {"label": "Noortekeskus", "filters": {"alamgrupp": {"noortekeskus"}}},
+            {"label": "Kontserdimaja", "filters": {"alamgrupp": {"kontserdimaja"}}},
+            {
+                "label": "Kultuuri- ja rahvamaja",
+                "filters": {"alamgrupp": {"kultuuri- ja rahvamaja"}},
+            },
+            {
+                "label": "Kultuuri- ja huvikeskus",
+                "filters": {"alamgrupp": {"kultuuri- ja huvikeskus"}},
+            },
         ],
     },
     "majutus": {
         "label": "Majutus",
-        "filters": {"grupp": {"majutus"}},
+        "queries": [
+            {"label": "Majutus", "filters": {"alamgrupp": {"majutus"}}},
+            {"label": "Ühiselamu", "filters": {"alamgrupp": {"ühiselamu"}}},
+        ],
     },
 }
 

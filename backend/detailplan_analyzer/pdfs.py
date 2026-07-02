@@ -105,17 +105,26 @@ def extract_relevant_pdfs(zip_path: Path, output_dir: Path) -> list[Path]:
         sk_pdf_members = [
             member for member in pdf_members if Path(member).name.startswith("SK")
         ]
-        members_to_extract = sk_pdf_members or pdf_members
+        jn_pdf_members = [
+            member for member in pdf_members if Path(member).name.startswith("JN100")
+        ]
+        preferred_members = sk_pdf_members + [
+            member for member in jn_pdf_members if member not in sk_pdf_members
+        ]
+        members_to_extract = preferred_members or pdf_members
         logger.debug(
             f"ZIP members={len(members)} pdf_members={len(pdf_members)} "
             f"sk_pdf_members={len(sk_pdf_members)} "
+            f"jn_pdf_members={len(jn_pdf_members)} "
             f"extracting={len(members_to_extract)} zip={zip_path}"
         )
 
         for member in members_to_extract:
             member_path = Path(member)
             relative_target = (
-                Path(member_path.name) if sk_pdf_members else Path(*member_path.parts)
+                Path(member_path.name)
+                if preferred_members
+                else Path(*member_path.parts)
             )
             target_path = (output_dir / relative_target).resolve()
             if not target_path.is_relative_to(output_root):

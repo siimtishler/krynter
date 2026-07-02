@@ -18,6 +18,8 @@ class Config(BaseSettings):
     poi_file: Path = DATA_DIR / "Tallinn_POIS3.gpkg"
     cadastre_file: Path = DATA_DIR / "Tallinn_KATASTER_GPKG2.gpkg"
     noise_file: Path = DATA_DIR / "myra_tln.gpkg"
+    poi_settings_file: Path = DATA_DIR / "poi-settings.json"
+    poi_settings_default_file: Path = DATA_DIR / "poi-settings-default.json"
     heritage_poi_file: Path = DATA_DIR / "muinsuskaitse_poi.gpkg"
     restriction_areas_file: Path = DATA_DIR / "restriction_areas.gpkg"
     detail_plans_file: Path = DATA_DIR / "detail_plans_tln.gpkg"
