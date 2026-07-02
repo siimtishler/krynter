@@ -202,14 +202,18 @@ class RuleBasedExtractor:
             )
             return None
 
-        reasons = self._candidate_reasons(chunk, spec, raw, line, context, target_address)
+        reasons = self._candidate_reasons(
+            chunk, spec, raw, line, context, target_address
+        )
         return RegexCandidate(
             field_key=spec.key,
             label=spec.label,
             value=value,
             raw_value=parse_text(raw),
             unit=spec.unit,
-            confidence=min(regex.confidence, self.extraction_policy.pdf_regex_confidence_cap),
+            confidence=min(
+                regex.confidence, self.extraction_policy.pdf_regex_confidence_cap
+            ),
             pattern_name=regex.name,
             evidence=Evidence(
                 pdf=chunk.pdf_path.name,
@@ -239,14 +243,18 @@ class RuleBasedExtractor:
             reasons.append("target_address_context")
         if has_wrong_same_street_address(target_address, line):
             reasons.append("same_street_wrong_address")
-        elif has_wrong_same_street_address(target_address, context) and not has_target_address(
+        elif has_wrong_same_street_address(
+            target_address, context
+        ) and not has_target_address(
             target_address,
             line,
         ):
             reasons.append("context_wrong_address")
         if has_wrong_same_street_address(target_address, candidate_text):
             reasons.append("multi_address_context")
-        if not has_target_address(target_address, candidate_text) and has_other_address_like_text(line):
+        if not has_target_address(
+            target_address, candidate_text
+        ) and has_other_address_like_text(line):
             reasons.append("other_address_context")
         if self._line_has_multiple_values(spec.key, line):
             reasons.append("multi_value_table_row")
@@ -298,8 +306,12 @@ class RuleBasedExtractor:
             offset = line_end + 1
 
         start = max(0, line_index - self.extraction_policy.match_context_lines)
-        end = min(len(lines), line_index + self.extraction_policy.match_context_lines + 1)
-        return "\n".join(lines[start:end]).strip()[: self.extraction_policy.match_context_chars]
+        end = min(
+            len(lines), line_index + self.extraction_policy.match_context_lines + 1
+        )
+        return "\n".join(lines[start:end]).strip()[
+            : self.extraction_policy.match_context_chars
+        ]
 
     def _line_for_match(self, text: str, match: re.Match) -> str:
         start = text.rfind("\n", 0, match.start()) + 1
@@ -336,7 +348,9 @@ class RuleBasedExtractor:
         return False
 
     @staticmethod
-    def _loggable_fields(fields: dict[str, ExtractedField]) -> dict[str, dict[str, Any]]:
+    def _loggable_fields(
+        fields: dict[str, ExtractedField],
+    ) -> dict[str, dict[str, Any]]:
         return {
             key: {
                 "value": field.value,

@@ -316,7 +316,9 @@ class CandidateScorer:
     ) -> bool:
         best_score = best.score or 0
         for candidate in candidates[1:]:
-            if (candidate.score or 0) < best_score - self.policy.close_conflict_score_gap:
+            if (
+                candidate.score or 0
+            ) < best_score - self.policy.close_conflict_score_gap:
                 continue
             if (
                 "targeted_address" in best.reasons
@@ -338,10 +340,9 @@ class CandidateScorer:
             right_float = float_or_none(right.value)
             if left_float is not None and right_float is not None:
                 return values_close(left_float, right_float, absolute=0.01)
-        return (
-            CandidateScorer._candidate_value_key(left)
-            == CandidateScorer._candidate_value_key(right)
-        )
+        return CandidateScorer._candidate_value_key(
+            left
+        ) == CandidateScorer._candidate_value_key(right)
 
     @staticmethod
     def _candidate_value_key(candidate: RegexCandidate) -> str:

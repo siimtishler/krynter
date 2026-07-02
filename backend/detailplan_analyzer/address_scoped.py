@@ -52,8 +52,12 @@ class AddressScopedExtractor:
         for chunk in chunks:
             if chunk.field_key is not None and chunk.field_key != spec.key:
                 continue
-            candidates.extend(self._table_row_target_candidates(chunk, spec, target_address))
-            candidates.extend(self._targeted_window_candidates(chunk, spec, target_address))
+            candidates.extend(
+                self._table_row_target_candidates(chunk, spec, target_address)
+            )
+            candidates.extend(
+                self._targeted_window_candidates(chunk, spec, target_address)
+            )
         return candidates
 
     def _manual_regex_candidate(
@@ -224,7 +228,9 @@ class AddressScopedExtractor:
     ) -> list[RegexCandidate]:
         candidates: list[RegexCandidate] = []
         for window, line in self._selected_address_windows(chunk, target_address):
-            raw, pattern_name = self._window_value_for_spec(spec, window, line, target_address)
+            raw, pattern_name = self._window_value_for_spec(
+                spec, window, line, target_address
+            )
             if raw is None:
                 continue
             evidence = line if line else window.splitlines()[0]
@@ -313,7 +319,9 @@ class AddressScopedExtractor:
         if "katuse" not in window.lower() and "katuse" not in line.lower():
             return None
 
-        pitch = re.search(r"\bkatuse\s*kalle|\bkatusekalle", window, flags=re.IGNORECASE)
+        pitch = re.search(
+            r"\bkatuse\s*kalle|\bkatusekalle", window, flags=re.IGNORECASE
+        )
         if pitch is not None:
             pitch_value = re.search(
                 rf"(?P<value>{NUMBER_TOKEN_PATTERN}\s*[˚°Oo]?\s*[-–]\s*"

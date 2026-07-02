@@ -159,7 +159,9 @@ class DetailPlanAnalyzerPipeline:
             target_address=address,
         )
         if not chunks:
-            setup_issues.append("PDFidest ei leitud regex-analüüsiks sobivaid tekstilehti.")
+            setup_issues.append(
+                "PDFidest ei leitud regex-analüüsiks sobivaid tekstilehti."
+            )
 
         self._maybe_resolve_with_llm(
             building_right=building_right,

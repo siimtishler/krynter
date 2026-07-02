@@ -335,7 +335,9 @@ class BuildingRightEnricher:
         evidence_items: list[Evidence] = []
         if floors_field.evidence is not None:
             evidence_items.append(floors_field.evidence)
-        evidence_items.extend(candidate.evidence for candidate in floors_field.candidates)
+        evidence_items.extend(
+            candidate.evidence for candidate in floors_field.candidates
+        )
 
         for evidence in evidence_items:
             count = self._safe_building_count_from_text(evidence.text)
