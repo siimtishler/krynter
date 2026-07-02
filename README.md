@@ -8,6 +8,32 @@ Detail-plan analyzer: downloads/caches detail-plan PDFs or ZIPs, OCRs with OCRmy
 - Optional LLM layer: current code includes an Ollama-backed resolver hook that can verify/resolve uncertain regex candidates after deterministic extraction.
 - Data/runtime: Docker/Poetry setup, local data/ mount for large GIS files and cached downloaded PDFs.
 
+## Backend Technical Overview
+
+The backend is a FastAPI service rooted at `backend.main:app`; routes live in
+`backend/api/api.py`. `/api/search` resolves an address or cadastre code to a
+parcel, returns parcel attributes under `Aadress`, and adds GeoPandas/Shapely
+spatial context such as POIs, noise, restrictions, and overlapping detail plans.
+
+Detail-plan analysis starts from the highest-overlap plan for the selected
+parcel. The analyzer downloads and caches PDFs or ZIP contents, prefers
+explanatory `SK*` PDFs and `JN100*` drawings when present, OCRs scanned files
+with OCRmyPDF/Tesseract, extracts normalized text with PyMuPDF, and selects both
+broad relevant pages and narrow field-specific windows.
+
+Building-right extraction is rule based first. Field specs define regex patterns
+and parsers, the rule engine creates candidates, address-scoped rules handle
+table rows or windows tied to the selected parcel, and a scorer ranks candidates
+by confidence, address context, weak/strong keywords, and known false-positive
+signals. Cadastre and derived enrichers then add authoritative parcel area,
+derived footprint/coverage checks, and building-count consistency notes. When
+enabled, the Ollama-backed LLM resolver only sees unresolved candidate fields and
+can accept or correct values when the supplied evidence supports them.
+
+### Coordinate Reference System:
+
+Backend internal CRS: EPSG:3301
+Frontend/API CRS: EPSG:4326
 
 ## Developing
 ```
@@ -35,8 +61,7 @@ Python dependencies with:
 scripts/install_local_deps.sh
 ```
 
-Ollama install options are still present in the helper script from the previous
-LLM workflow, but the current regex-only analyzer does not use Ollama.
+Ollama install options are available for the optional LLM resolver.
 
 ```bash
 scripts/install_local_deps.sh --with-ollama
@@ -50,8 +75,8 @@ scripts/install_local_deps.sh --with-ollama --model=qwen3:14b
 
 ## Docker
 
-The Docker stack runs the backend, frontend, OCR dependencies, and currently
-still includes the older Ollama service pending dependency cleanup:
+The Docker stack runs the backend, frontend, OCR dependencies, and an Ollama
+service for the optional LLM resolver:
 
 ```bash
 DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose up --build
@@ -85,7 +110,7 @@ docker compose run --rm backend \
 The backend endpoint `GET /api/detail-plan-analysis` analyzes the highest-overlap
 detail-planning PDF for a parcel. It downloads/caches the PDF, OCRs only when
 needed, extracts page text with PyMuPDF, selects building-right pages, and returns
-a synchronous regex-only `ehitamise_pohioigus` result.
+a synchronous building-right analysis result.
 
 Manual local PDF run:
 
